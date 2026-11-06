@@ -15,13 +15,17 @@ local CONFIG_FILE = "mcp/config.json";
 -- 1. Gerenciamento do config.json no VHD
 local function loadConfig()
     VHD.forceDirectory("mcp");
-    local file = VHD.openFile(CONFIG_FILE, "r");
-    if file ~= nil then
-        local content = file:readAll();
-        file:close();
-        local ok, data = pcall(json.decode, content);
-        if ok and type(data) == "table" then
-            return data;
+    if VHD.fileExists(CONFIG_FILE) then
+        local file = VHD.openFile(CONFIG_FILE, "r");
+        if file ~= nil then
+            local content = file:readBinary("utf8");
+            file:close();
+            if content ~= nil and content ~= "" then
+                local ok, data = pcall(json.decode, content);
+                if ok and type(data) == "table" then
+                    return data;
+                end
+            end
         end
     end
     -- Valores padrão caso não exista
@@ -37,7 +41,7 @@ local function saveConfig(cfg)
     VHD.forceDirectory("mcp");
     local file = VHD.openFile(CONFIG_FILE, "w+");
     if file ~= nil then
-        file:write(json.encode(cfg));
+        file:writeBinary("utf8", json.encode(cfg));
         file:close();
         return true;
     end
@@ -59,12 +63,14 @@ local function deployServer()
     srcFile:close();
 
     local needsCopy = true;
-    local dstFile = VHD.openFile(DST, "r");
-    if dstFile ~= nil then
-        local dstSize = dstFile.size;
-        dstFile:close();
-        if dstSize == srcSize and srcSize > 0 then
-            needsCopy = false;
+    if VHD.fileExists(DST) then
+        local dstFile = VHD.openFile(DST, "r");
+        if dstFile ~= nil then
+            local dstSize = dstFile.size;
+            dstFile:close();
+            if dstSize == srcSize and srcSize > 0 then
+                needsCopy = false;
+            end
         end
     end
 
