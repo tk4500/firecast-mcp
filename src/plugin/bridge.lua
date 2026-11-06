@@ -8,14 +8,14 @@ local VHD = require("sdk/vhd.lua");
 
 local bridge = {};
 
-local INBOX_DIR  = "mcp/inbox/";
-local OUTBOX_DIR = "mcp/outbox/";
+local INBOX_DIR  = "/mcp/inbox/";
+local OUTBOX_DIR = "/mcp/outbox/";
 
 -- Garante que as pastas existam
 local function ensureDirs()
-    VHD.forceDirectory("mcp");
-    VHD.forceDirectory(INBOX_DIR);
-    VHD.forceDirectory(OUTBOX_DIR);
+    VHD.forceDirectory("/mcp");
+    VHD.forceDirectory("/mcp/inbox");
+    VHD.forceDirectory("/mcp/outbox");
 end
 
 -- Lê e deleta todos os arquivos do inbox, retorna lista de {id, command, args}

@@ -10,11 +10,11 @@ local VHD      = require("sdk/vhd.lua");
 local json     = require("sdk/json.lua");
 
 local POLL_INTERVAL_MS = 500;
-local CONFIG_FILE = "mcp/config.json";
+local CONFIG_FILE = "/mcp/config.json";
 
 -- 1. Gerenciamento do config.json no VHD
 local function loadConfig()
-    VHD.forceDirectory("mcp");
+    VHD.forceDirectory("/mcp");
     if VHD.fileExists(CONFIG_FILE) then
         local file = VHD.openFile(CONFIG_FILE, "r");
         if file ~= nil then
@@ -30,7 +30,6 @@ local function loadConfig()
     end
     -- Valores padrão caso não exista
     return {
-        db_path = nil,
         poll_interval_ms = 500,
         http_port = 3000,
         version = "1.0.0"
@@ -38,20 +37,23 @@ local function loadConfig()
 end
 
 local function saveConfig(cfg)
-    VHD.forceDirectory("mcp");
-    local file = VHD.openFile(CONFIG_FILE, "w+");
+    VHD.forceDirectory("/mcp");
+    local file, msgError = VHD.openFile(CONFIG_FILE, "w+");
     if file ~= nil then
         file:writeBinary("utf8", json.encode(cfg));
         file:close();
         return true;
+    else
+        local Log = require("sdk/log.lua");
+        Log.e("FirecastMCP", "Erro ao salvar config.json: " .. tostring(msgError));
     end
     return false;
 end
 
 -- 2. Copia / Atualiza o server.exe do RPK para o VHD gravável
 local function deployServer()
-    local SRC = "server.exe";      -- raiz do .rpk
-    local DST = "mcp/server.exe";  -- destino gravável no VHD
+    local SRC = "/server.exe";      -- raiz do .rpk
+    local DST = "/mcp/server.exe";  -- destino gravável no VHD
 
     if not VHD.fileExists(SRC) then
         return;
@@ -75,7 +77,12 @@ local function deployServer()
     end
 
     if needsCopy then
-        pcall(VHD.copyFile, SRC, DST);
+        VHD.forceDirectory("/mcp");
+        local ok, err = pcall(VHD.copyFile, SRC, DST);
+        if not ok then
+            local Log = require("sdk/log.lua");
+            Log.e("FirecastMCP", "Erro ao copiar server.exe: " .. tostring(err));
+        end
     end
 end
 

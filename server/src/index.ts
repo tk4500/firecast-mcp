@@ -19,6 +19,7 @@ interface Config {
   db_path?: string | null;
   poll_interval_ms?: number;
   http_port?: number;
+  version?: string;
 }
 
 // 1. Parsing de argumentos CLI
@@ -56,11 +57,25 @@ function resolveBridgePath(): string {
   return process.cwd();
 }
 
-// 3. Leitura do config.json escrito pelo plugin Lua
+// 3. Leitura do config.json escrito pelo plugin Lua (cria padrão se inexistente)
 function readConfig(bridgeDir: string): Config {
   const configPath = path.join(bridgeDir, "config.json");
   if (!fs.existsSync(configPath)) {
-    return {};
+    const defaultConfig: Config = {
+      poll_interval_ms: 500,
+      http_port: 3000,
+      version: "1.0.0",
+    };
+    try {
+      if (!fs.existsSync(bridgeDir)) {
+        fs.mkdirSync(bridgeDir, { recursive: true });
+      }
+      fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");
+      return defaultConfig;
+    } catch (err) {
+      process.stderr.write(`[Firecast MCP] Aviso: erro ao criar config.json inicial: ${err}\n`);
+      return {};
+    }
   }
 
   try {
