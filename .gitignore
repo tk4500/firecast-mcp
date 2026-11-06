@@ -4,3 +4,4 @@ server/dist/
 src/output/
 server/mcp/
 server/firecast.db
+src/firecast.db

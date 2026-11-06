@@ -2,7 +2,7 @@
 // SQLite store para eventos do outbox e dados estruturados buscados do Firecast.
 // Usa sql.js (WASM puro, sem bindings nativos — empacotável com pkg).
 
-import initSqlJs, { Database, SqlJsStatic } from "sql.js";
+import initSqlJs, { Database, SqlJsStatic } from "sql.js/dist/sql-asm.js";
 import path from "path";
 import fs from "fs";
 
@@ -10,21 +10,13 @@ let db: Database;
 let SQL: SqlJsStatic;
 let dbPath: string;
 
-function getWasmPath(): string {
-  if (process.env.SQLJS_WASM_PATH) return process.env.SQLJS_WASM_PATH;
-  const exeDir = path.dirname(process.execPath);
-  const candidate = path.join(exeDir, "sql-wasm.wasm");
-  if (fs.existsSync(candidate)) return candidate;
-  return path.join(__dirname, "..", "node_modules", "sql.js", "dist", "sql-wasm.wasm");
-}
-
 export async function initDb(bridgePath: string): Promise<void> {
   dbPath = process.env.FIRECAST_DB_PATH ?? path.join(bridgePath, "firecast.db");
   const dbDir = path.dirname(dbPath);
   fs.mkdirSync(dbDir, { recursive: true });
 
-  const wasmPath = getWasmPath();
-  SQL = await initSqlJs({ locateFile: () => wasmPath });
+  // sql-asm.js não precisa de wasm — funciona standalone
+  SQL = await initSqlJs();
 
   if (fs.existsSync(dbPath)) {
     const fileBuffer = fs.readFileSync(dbPath);
