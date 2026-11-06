@@ -1,2 +1,6 @@
 docs/
-
+server/node_modules/
+server/dist/
+src/output/
+server/mcp/
+server/firecast.db

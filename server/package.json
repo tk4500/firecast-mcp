@@ -1,0 +1,28 @@
+{
+  "name": "firecast-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Firecast plugin bridge",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "bundle": "esbuild dist/index.js --bundle --platform=node --target=node18 --outfile=dist/bundle.js --external:sql.js",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "pkg": "npm run build && npm run bundle && pkg dist/bundle.js --targets node18-win-x64 --output ../src/server.exe --assets node_modules/sql.js/dist/sql-wasm.wasm"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/sql.js": "^1.4.11",
+    "sql.js": "^1.15.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "pkg": "^5.8.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true
+  }
+}
