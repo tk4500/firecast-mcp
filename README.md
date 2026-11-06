@@ -33,20 +33,54 @@ Agente (Claude/Hermes) ←stdio→ server.exe (Node.js MCP)
 
 ### Localização do banco de dados
 
-Edite `mcp/config.lua` no VHD:
+O banco de dados SQLite (`firecast.db`) pode ser configurado de três formas:
 
-```lua
-return {
-  db_path = "D:/Backups/firecast-mesas.db",  -- caminho customizado
-}
-```
+1. **Pelo Chat do Firecast (Recomendado):**
+   Dentro de qualquer chat no Firecast, digite:
+   - `/mcp status` — exibe o local atual do banco de dados e status do plugin.
+   - `/mcp db D:/MinhaPasta/firecast.db` — altera o caminho do banco. O plugin salva em `mcp/config.json`.
+   - `/mcp db reset` — restaura para o local padrão (`<VHD>/mcp/firecast.db`).
 
-Se não especificado, o DB fica em `<VHD>/mcp/firecast.db`.
+2. **Pelo arquivo `mcp/config.json` no VHD:**
+   ```json
+   {
+     "db_path": "D:/MinhaPasta/firecast.db",
+     "poll_interval_ms": 500,
+     "http_port": 3000
+   }
+   ```
 
-Alternativamente, use variável de ambiente:
+3. **Por variável de ambiente:**
+   ```bash
+   export FIRECAST_DB_PATH="D:/MinhaPasta/firecast.db"
+   ```
+
+## Modos de Execução do Servidor
+
+### 1. Modo Padrão (stdio) — Para Agentes de IA
+Utilizado pelo Claude Desktop, Hermes e outros clientes MCP:
 ```bash
-export FIRECAST_DB_PATH="/caminho/custom/firecast.db"
+server.exe
 ```
+
+### 2. Modo HTTP (`--http`) — Para Testes e Depuração
+Permite testar o servidor diretamente via navegador, curl ou scripts sem precisar de um cliente MCP:
+```bash
+server.exe --http --port 3000
+```
+
+Rotas disponíveis no modo HTTP:
+- `GET /status` — exibe status, versão, caminhos do VHD/banco e ferramentas registradas.
+- `GET /tools` — lista os schemas JSON das ferramentas MCP.
+- `POST /call` — executa uma ferramenta diretamente:
+  ```bash
+  curl -X POST http://localhost:3000/call -H "Content-Type: application/json" -d '{"name": "list_rooms", "arguments": {}}'
+  ```
+- `GET /db/rooms` — inspeciona todas as mesas cacheadas no SQLite.
+- `GET /db/events` — inspeciona os últimos eventos de mesa recebidos no SQLite.
+- `GET /inbox` e `GET /outbox` — lista arquivos pendentes nas pastas de sincronização.
+- `POST /simulate-event` — injeta um evento simulado para testar o watcher e a persistência.
+- `POST /mcp` — endpoint MCP JSON-RPC completo via HTTP POST.
 
 ## Build
 

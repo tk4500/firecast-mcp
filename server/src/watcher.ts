@@ -24,29 +24,45 @@ export function removeResultCallback(id: string): void {
   resultCallbacks.delete(id);
 }
 
+let watchedOutboxDir: string;
+
+export function getOutboxDir(): string {
+  return watchedOutboxDir;
+}
+
 export function startWatcher(outboxDir: string): void {
+  watchedOutboxDir = outboxDir;
   fs.mkdirSync(outboxDir, { recursive: true });
 
   // Processa qualquer arquivo já existente ao iniciar
   drainOutbox(outboxDir);
 
-  // Monitora novos arquivos
-  fs.watch(outboxDir, (_event, filename) => {
-    if (!filename) return;
-    const filePath = path.join(outboxDir, filename);
-    // Pequeno delay para garantir que a escrita foi finalizada
-    setTimeout(() => processFile(filePath), 50);
-  });
+  // 1. Monitora eventos imediatos do sistema de arquivos
+  try {
+    fs.watch(outboxDir, (_event, filename) => {
+      if (!filename) return;
+      const filePath = path.join(outboxDir, filename);
+      setTimeout(() => processFile(filePath), 50);
+    });
+  } catch {
+    // fs.watch pode falhar em alguns ambientes de rede/VHD
+  }
+
+  // 2. Polling interval contínuo a cada 300ms (garantia contra falhas de fs.watch no Windows)
+  setInterval(() => {
+    drainOutbox(outboxDir);
+  }, 300);
 }
 
 function drainOutbox(outboxDir: string): void {
   try {
+    if (!fs.existsSync(outboxDir)) return;
     const files = fs.readdirSync(outboxDir);
     for (const file of files) {
       processFile(path.join(outboxDir, file));
     }
   } catch {
-    // pasta pode não existir ainda
+    // pasta pode estar sendo acessada por outro processo
   }
 }
 
@@ -57,12 +73,20 @@ function processFile(filePath: string): void {
     const content = fs.readFileSync(filePath, "utf-8").trim();
     if (!content) return;
 
-    fs.unlinkSync(filePath);
-
+    // Tenta fazer o parse primeiro
     const event: OutboxEvent = JSON.parse(content);
+
+    // Se o parse teve sucesso, remove o arquivo do outbox
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // se falhar ao deletar (arquivo ocupado), ignora por agora
+    }
+
     handleEvent(event);
   } catch {
-    // arquivo malformado ou já deletado — ignora
+    // Se o arquivo estiver incompleto sendo escrito pelo Lua,
+    // não deleta e deixa o próximo ciclo de polling processar
   }
 }
 

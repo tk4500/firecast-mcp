@@ -9,8 +9,12 @@ import { onCommandResult, removeResultCallback } from "./watcher.js";
 let inboxDir: string;
 
 export function initBridge(bridgePath: string): void {
-  inboxDir = path.join(bridgePath, "mcp", "inbox");
+  inboxDir = path.join(bridgePath, "inbox");
   fs.mkdirSync(inboxDir, { recursive: true });
+}
+
+export function getInboxDir(): string {
+  return inboxDir;
 }
 
 export function sendCommand(

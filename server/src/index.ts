@@ -1,60 +1,115 @@
 // index.ts
-// Ponto de entrada do servidor MCP stdio para o Firecast.
-// 
-// O servidor descobre o bridgePath a partir do seu próprio __dirname:
-// como o server.exe fica em <VHD>/mcp/server.exe, o bridgePath é o diretório pai (__dirname/../).
+// Ponto de entrada do servidor MCP para o Firecast.
+//
+// Suporta dois modos:
+// 1. stdio (padrão): para agentes MCP (Claude Desktop, Hermes, etc.)
+// 2. HTTP (--http ou -h): para testes manuais, curl, inspeção de estado e testes E2E.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import path from "path";
+import fs from "fs";
 import { initDb } from "./db.js";
 import { initBridge } from "./bridge.js";
 import { startWatcher } from "./watcher.js";
 import { registerRoomTools } from "./tools/rooms.js";
-import fs from "fs";
+import { startHttpServer } from "./http.js";
 
-// bridgePath: pasta onde ficam inbox/, outbox/ e firecast.db
-// Quando empacotado, o .exe fica em <VHD>/mcp/server.exe, então process.cwd() ou dirname(process.execPath) aponta para mcp/
-// Em dev (node dist/index.js), usar FIRECAST_BRIDGE_PATH para apontar para o VHD de teste.
-const bridgePath = process.env.FIRECAST_BRIDGE_PATH ?? path.dirname(process.execPath);
+interface Config {
+  db_path?: string | null;
+  poll_interval_ms?: number;
+  http_port?: number;
+}
 
-// Lê configuração do config.lua (formato simples: db_path = "...")
-function readConfig(): { db_path?: string } {
-  const configPath = path.join(bridgePath, "config.lua");
-  if (!fs.existsSync(configPath)) return {};
-  
-  const content = fs.readFileSync(configPath, "utf-8");
-  const match = content.match(/db_path\s*=\s*"([^"]+)"/);
-  if (match) return { db_path: match[1] };
-  return {};
+// 1. Parsing de argumentos CLI
+const args = process.argv.slice(2);
+const isHttp = args.includes("--http") || args.includes("-h");
+
+const portArgIdx = args.findIndex((a) => a === "--port" || a === "-p");
+const cliPort = portArgIdx !== -1 ? parseInt(args[portArgIdx + 1], 10) : undefined;
+
+const pathArgIdx = args.findIndex((a) => a === "--path");
+const cliPath = pathArgIdx !== -1 ? args[pathArgIdx + 1] : undefined;
+
+// 2. Descoberta inteligente do bridgePath (pasta mcp/ com inbox, outbox e firecast.db)
+function resolveBridgePath(): string {
+  if (cliPath) {
+    return path.resolve(cliPath);
+  }
+  if (process.env.FIRECAST_BRIDGE_PATH) {
+    return path.resolve(process.env.FIRECAST_BRIDGE_PATH);
+  }
+  if ((process as any).pkg) {
+    // Quando empacotado como server.exe, o executável fica em <VHD>/mcp/server.exe
+    return path.dirname(process.execPath);
+  }
+
+  // Em modo dev (node dist/index.js), tenta o VHD padrão do usuário se existir
+  const appData = process.env.APPDATA;
+  if (appData) {
+    const vhdMcp = path.join(appData, "Firecast", "Plugins", "com.tkplayer.firecast_mcp_vhd", "mcp");
+    if (fs.existsSync(vhdMcp)) {
+      return vhdMcp;
+    }
+  }
+
+  return process.cwd();
+}
+
+// 3. Leitura do config.json escrito pelo plugin Lua
+function readConfig(bridgeDir: string): Config {
+  const configPath = path.join(bridgeDir, "config.json");
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(configPath, "utf-8");
+    return JSON.parse(content) as Config;
+  } catch (err) {
+    process.stderr.write(`[Firecast MCP] Aviso: erro ao ler config.json: ${err}\n`);
+    return {};
+  }
 }
 
 async function main(): Promise<void> {
-  const config = readConfig();
-  
-  // Se db_path está no config, sobrescreve a env var
+  const bridgePath = resolveBridgePath();
+  const config = readConfig(bridgePath);
+
+  // Se db_path foi definido no config.json (ex: via /mcp db no Firecast), aplica ao DB
   if (config.db_path && !process.env.FIRECAST_DB_PATH) {
     process.env.FIRECAST_DB_PATH = config.db_path;
   }
-  
-  // Inicializa DB e bridge antes de registrar tools
+
+  // Inicializa o banco SQLite, pastas inbox/outbox e o watcher
   await initDb(bridgePath);
   initBridge(bridgePath);
-  startWatcher(path.join(bridgePath, "mcp", "outbox"));
+  startWatcher(path.join(bridgePath, "outbox"));
 
-  const server = new McpServer({
-    name: "firecast-mcp",
-    version: "1.0.0",
-  });
+  if (isHttp) {
+    // --- Modo HTTP (Testes, curl, inspeção) ---
+    const port = cliPort ?? (process.env.PORT ? parseInt(process.env.PORT, 10) : (config.http_port ?? 3000));
+    startHttpServer({
+      port,
+      bridgePath,
+      config: config as Record<string, unknown>,
+    });
+  } else {
+    // --- Modo stdio (Padrão para MCP) ---
+    const server = new McpServer({
+      name: "firecast-mcp",
+      version: "1.0.0",
+    });
 
-  // Fase 1: Mesas
-  registerRoomTools(server);
+    // Registra ferramentas do MCP
+    registerRoomTools(server);
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
 
 main().catch((err) => {
-  process.stderr.write(`Fatal: ${err}\n`);
+  process.stderr.write(`[Firecast MCP] Fatal: ${err.stack ?? err}\n`);
   process.exit(1);
 });

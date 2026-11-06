@@ -91,6 +91,7 @@ function migrate(): void {
 }
 
 export function getDb(): Database { return db; }
+export function getDbPath(): string { return dbPath; }
 
 // --- Rooms ---
 
@@ -176,4 +177,22 @@ export function insertRoomEvent(event: {
     ":responsible_login": event.responsible_login ?? null,
     ":ts":                event.ts,
   });
+}
+
+export interface RoomEventRow {
+  seq: number;
+  event_id: string;
+  type: string;
+  room_id: number;
+  player_login: string;
+  player_nome: string;
+  is_me: number;
+  is_kick: number;
+  kick_reason: string | null;
+  responsible_login: string | null;
+  ts: number;
+}
+
+export function getAllRoomEvents(limit = 100): RoomEventRow[] {
+  return query<RoomEventRow>("SELECT * FROM room_events ORDER BY seq DESC LIMIT ?", [limit]);
 }
