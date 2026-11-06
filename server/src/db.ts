@@ -2,7 +2,9 @@
 // SQLite store para eventos do outbox e dados estruturados buscados do Firecast.
 // Usa sql.js (WASM puro, sem bindings nativos — empacotável com pkg).
 
-import initSqlJs, { Database, SqlJsStatic } from "sql.js/dist/sql-asm.js";
+// @ts-ignore
+import initSqlJs from "sql.js/dist/sql-wasm-inline.js";
+import type { Database, SqlJsStatic } from "sql.js";
 import path from "path";
 import fs from "fs";
 
@@ -10,17 +12,44 @@ let db: Database;
 let SQL: SqlJsStatic;
 let dbPath: string;
 
+function resolveDbFilePath(target: string): string {
+  let resolved = path.resolve(target);
+  if (fs.existsSync(resolved)) {
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        resolved = path.join(resolved, "firecast.db");
+      }
+    } catch {
+      // Ignora erro de stat
+    }
+  } else if (!path.extname(resolved) || resolved.endsWith("/") || resolved.endsWith("\\")) {
+    resolved = path.join(resolved, "firecast.db");
+  }
+  return resolved;
+}
+
 export async function initDb(bridgePath: string): Promise<void> {
-  dbPath = process.env.FIRECAST_DB_PATH ?? path.join(bridgePath, "firecast.db");
+  const target = process.env.FIRECAST_DB_PATH ?? path.join(bridgePath, "firecast.db");
+  dbPath = resolveDbFilePath(target);
   const dbDir = path.dirname(dbPath);
   fs.mkdirSync(dbDir, { recursive: true });
 
-  // sql-asm.js não precisa de wasm — funciona standalone
+  // sql-wasm-inline.js embute o WebAssembly diretamente no JS — funciona 100% standalone sem arquivos externos
   SQL = await initSqlJs();
 
   if (fs.existsSync(dbPath)) {
-    const fileBuffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(fileBuffer);
+    try {
+      const stat = fs.statSync(dbPath);
+      if (stat.isFile() && stat.size > 0) {
+        const fileBuffer = fs.readFileSync(dbPath);
+        db = new SQL.Database(fileBuffer);
+      } else {
+        db = new SQL.Database();
+      }
+    } catch (err) {
+      process.stderr.write(`[Firecast MCP] Aviso: não foi possível ler ${dbPath}, criando novo: ${err}\n`);
+      db = new SQL.Database();
+    }
   } else {
     db = new SQL.Database();
   }
