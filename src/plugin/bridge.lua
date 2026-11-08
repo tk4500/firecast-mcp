@@ -60,22 +60,25 @@ end
 -- type: string (ex: "room_joined", "command_result", "chat_message")
 -- payload: table
 function bridge.emit(eventType, payload)
-    local ts = os.time();
-    local id = payload.id or tostring(ts) .. math.random(1000, 9999);
-    local fileName = OUTBOX_DIR .. ts .. "-" .. id .. "." .. eventType .. ".json";
-    
-    local data = {
-        id   = id,
-        type = eventType,
-        ts   = ts,
-        data = payload,
-    };
+    pcall(function()
+        local ts = os.time();
+        local id = (payload and payload.id) or (tostring(ts) .. math.random(1000, 9999));
+        local fileName = OUTBOX_DIR .. ts .. "-" .. id .. "." .. eventType .. ".json";
+        
+        local data = {
+            id   = id,
+            type = eventType,
+            ts   = ts,
+            data = payload or {},
+        };
 
-    local file = VHD.openFile(fileName, "w+");
-    if file ~= nil then
-        file:writeBinary("utf8", json.encode(data));
-        file:close();
-    end
+        local encoded = json.encode(data);
+        local file = VHD.openFile(fileName, "w+");
+        if file ~= nil then
+            file:writeBinary("utf8", encoded);
+            file:close();
+        end
+    end);
 end
 
 -- Callback chamado pelo timer: processa inbox
@@ -90,22 +93,43 @@ function bridge.tick()
     for _, item in ipairs(items) do
         local handler = commandHandlers[item.command];
         if handler then
-            local ok, result = pcall(handler, item.args or {});
-            if ok then
-                bridge.emit("command_result", {
-                    id      = item.id,
-                    command = item.command,
-                    result  = result,
-                    success = true,
-                });
-            else
-                bridge.emit("command_result", {
-                    id      = item.id,
-                    command = item.command,
-                    error   = tostring(result),
-                    success = false,
-                });
+            local isFinished = false;
+            local function reply(ok, res)
+                if isFinished then return; end
+                isFinished = true;
+                if ok then
+                    bridge.emit("command_result", {
+                        id      = item.id,
+                        command = item.command,
+                        result  = res,
+                        success = true,
+                    });
+                else
+                    bridge.emit("command_result", {
+                        id      = item.id,
+                        command = item.command,
+                        error   = tostring(res),
+                        success = false,
+                    });
+                end
             end
+
+            local ok, result = pcall(handler, item.args or {}, reply);
+            if not ok then
+                reply(false, result);
+            elseif type(result) == "table" and type(result.thenDo) == "function" then
+                -- Suporte a Promises do SDK3
+                result:thenDo(function(...)
+                    local ret = {...};
+                    reply(true, #ret == 1 and ret[1] or ret);
+                end):onError(function(err)
+                    reply(false, err);
+                end);
+            elseif result ~= nil then
+                -- Retorno síncrono
+                reply(true, result);
+            end
+            -- Se result == nil e não chamou reply ainda, está aguardando o callback reply(ok, res)
         else
             bridge.emit("command_result", {
                 id      = item.id,

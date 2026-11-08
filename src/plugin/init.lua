@@ -4,6 +4,7 @@
 
 local bridge   = require("plugin/bridge.lua");
 local rooms    = require("plugin/commands/rooms.lua");
+local chat     = require("plugin/commands/chat.lua");
 local rrpgObjs = require("sdk/rrpgObjs.lua");
 local Firecast = require("sdk/firecast.lua");
 local VHD      = require("sdk/vhd.lua");
@@ -143,14 +144,19 @@ end
 
 -- 4. Registra os comandos do MCP
 local function registerCommands()
-    bridge.registerCommand("list_rooms",   rooms.listRooms);
-    bridge.registerCommand("get_room",     rooms.getRoom);
-    bridge.registerCommand("list_players", rooms.listPlayers);
+    bridge.registerCommand("list_rooms",        rooms.listRooms);
+    bridge.registerCommand("get_room",          rooms.getRoom);
+    bridge.registerCommand("list_players",      rooms.listPlayers);
+    bridge.registerCommand("list_chats",        chat.listChats);
+    bridge.registerCommand("get_chat_messages", chat.getChatMessages);
+    bridge.registerCommand("send_chat_message", chat.sendChatMessage);
+    bridge.registerCommand("roll_dice",         chat.rollDice);
 end
 
 -- 5. Registra os listeners de eventos
 local function registerEvents()
     rooms.registerEvents(bridge);
+    chat.registerEvents(bridge);
 end
 
 -- 6. Inicialização geral do plugin

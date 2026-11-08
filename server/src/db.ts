@@ -118,6 +118,28 @@ function migrate(): void {
 
     CREATE INDEX IF NOT EXISTS idx_room_events_room ON room_events(room_id);
     CREATE INDEX IF NOT EXISTS idx_room_events_ts   ON room_events(ts);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id    TEXT UNIQUE,
+      room_id       INTEGER,
+      chat_id       TEXT,
+      chat_kind     TEXT,
+      sender_id     INTEGER,
+      sender_login  TEXT,
+      sender_nick   TEXT,
+      mine          INTEGER,
+      type          TEXT,
+      content       TEXT,
+      npc_name      TEXT,
+      roll_result   INTEGER,
+      roll_data     TEXT,
+      ts            INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_room ON chat_messages(room_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(room_id, chat_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_ts   ON chat_messages(ts);
   `);
 
   try {
@@ -254,4 +276,90 @@ export interface RoomEventRow {
 
 export function getAllRoomEvents(limit = 100): RoomEventRow[] {
   return query<RoomEventRow>("SELECT * FROM room_events ORDER BY seq DESC LIMIT ?", [limit]);
+}
+
+// --- Chat Messages ---
+
+export interface ChatMessageRow {
+  seq?: number;
+  message_id?: string | null;
+  room_id: number;
+  chat_id: string;
+  chat_kind?: string | null;
+  sender_id?: number | null;
+  sender_login?: string | null;
+  sender_nick?: string | null;
+  mine?: number;
+  type?: string;
+  content: string;
+  npc_name?: string | null;
+  roll_result?: number | null;
+  roll_data?: string | null;
+  ts: number;
+}
+
+export function insertChatMessage(msg: {
+  message_id?: string | null;
+  room_id: number;
+  chat_id?: string | null;
+  chat_kind?: string | null;
+  sender?: { id?: number; login?: string; nick?: string } | null;
+  mine?: boolean | number;
+  type?: string;
+  content?: string;
+  npc?: string | null;
+  npc_name?: string | null;
+  roll?: { resultado?: number; asString?: string; ops?: any[] } | null;
+  ts?: number;
+}): void {
+  const ts = msg.ts ?? Math.floor(Date.now() / 1000);
+  const chatId = msg.chat_id ?? "main";
+  const messageId = msg.message_id ?? null;
+  const mine = msg.mine ? 1 : 0;
+  const rollResult = msg.roll?.resultado ?? null;
+  const rollData = msg.roll ? JSON.stringify(msg.roll) : null;
+  const npcName = msg.npc_name ?? msg.npc ?? null;
+
+  run(
+    `INSERT OR IGNORE INTO chat_messages (
+      message_id, room_id, chat_id, chat_kind,
+      sender_id, sender_login, sender_nick,
+      mine, type, content, npc_name,
+      roll_result, roll_data, ts
+    ) VALUES (
+      :message_id, :room_id, :chat_id, :chat_kind,
+      :sender_id, :sender_login, :sender_nick,
+      :mine, :type, :content, :npc_name,
+      :roll_result, :roll_data, :ts
+    )`,
+    {
+      ":message_id":   messageId,
+      ":room_id":      msg.room_id,
+      ":chat_id":      chatId,
+      ":chat_kind":    msg.chat_kind ?? null,
+      ":sender_id":    msg.sender?.id ?? null,
+      ":sender_login": msg.sender?.login ?? null,
+      ":sender_nick":  msg.sender?.nick ?? null,
+      ":mine":         mine,
+      ":type":         msg.type ?? "standard",
+      ":content":      msg.content ?? "",
+      ":npc_name":     npcName,
+      ":roll_result":  rollResult,
+      ":roll_data":    rollData,
+      ":ts":           ts,
+    }
+  );
+}
+
+export function getChatMessages(roomId: number, chatId?: string, limit = 50): ChatMessageRow[] {
+  if (chatId && chatId !== "all") {
+    return query<ChatMessageRow>(
+      `SELECT * FROM chat_messages WHERE room_id = ? AND chat_id = ? ORDER BY ts ASC, seq ASC LIMIT ?`,
+      [roomId, chatId, limit]
+    );
+  }
+  return query<ChatMessageRow>(
+    `SELECT * FROM chat_messages WHERE room_id = ? ORDER BY ts ASC, seq ASC LIMIT ?`,
+    [roomId, limit]
+  );
 }

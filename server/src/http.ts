@@ -4,8 +4,14 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
-import { getDbPath, getAllRooms, getRoomById, getAllRoomEvents } from "./db.js";
-import { handleListRooms, handleGetRoom } from "./tools/rooms.js";
+import { getDbPath, getAllRooms, getRoomById, getAllRoomEvents, getChatMessages } from "./db.js";
+import { handleListRooms, handleGetRoom, handleListPlayers } from "./tools/rooms.js";
+import {
+  handleListChats,
+  handleGetChatMessages,
+  handleSendChatMessage,
+  handleRollDice,
+} from "./tools/chat.js";
 import { sendCommand } from "./bridge.js";
 
 export interface HttpServerOptions {
@@ -84,6 +90,31 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
               description: "Retorna os detalhes de uma mesa específica pelo seu ID interno.",
               params: { id: "number" },
             },
+            {
+              name: "list_players",
+              description: "Lista os jogadores presentes em uma mesa específica.",
+              params: { room_id: "number" },
+            },
+            {
+              name: "list_chats",
+              description: "Lista todos os chats disponíveis em uma mesa (principal, PVTs, grupos).",
+              params: { room_id: "number" },
+            },
+            {
+              name: "get_chat_messages",
+              description: "Recupera o histórico recente de mensagens de um chat da mesa.",
+              params: { room_id: "number", chat_id: "string (opcional)", limit: "number (opcional)" },
+            },
+            {
+              name: "send_chat_message",
+              description: "Envia uma mensagem para o chat da mesa (standard, narrator, npc, action, laugh).",
+              params: { room_id: "number", message: "string", chat_id: "string (opcional)", type: "string (opcional)", npc_name: "string (opcional)" },
+            },
+            {
+              name: "roll_dice",
+              description: "Executa uma rolagem de dados oficial dentro do chat da mesa no Firecast.",
+              params: { room_id: "number", expression: "string", chat_id: "string (opcional)", message: "string (opcional)" },
+            },
           ],
         });
       }
@@ -95,7 +126,7 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
             {
               name: "list_rooms",
               description: "Lista todas as mesas abertas no Firecast. Usa cache local quando disponível.",
-              inputSchema: { type: "object", properties: {} },
+              inputSchema: { type: "object", properties: { fresh: { type: "boolean" } } },
             },
             {
               name: "get_room",
@@ -104,6 +135,67 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
                 type: "object",
                 properties: { id: { type: "integer", description: "codigoInterno da mesa" } },
                 required: ["id"],
+              },
+            },
+            {
+              name: "list_players",
+              description: "Lista os jogadores presentes em uma mesa específica.",
+              inputSchema: {
+                type: "object",
+                properties: { room_id: { type: "integer", description: "codigoInterno da mesa" } },
+                required: ["room_id"],
+              },
+            },
+            {
+              name: "list_chats",
+              description: "Lista todos os chats disponíveis em uma mesa (principal, PVTs, grupos).",
+              inputSchema: {
+                type: "object",
+                properties: { room_id: { type: "integer", description: "codigoInterno da mesa" } },
+                required: ["room_id"],
+              },
+            },
+            {
+              name: "get_chat_messages",
+              description: "Recupera o histórico recente de mensagens de um chat da mesa.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  chat_id: { type: "string" },
+                  limit: { type: "integer" },
+                  fresh: { type: "boolean" },
+                },
+                required: ["room_id"],
+              },
+            },
+            {
+              name: "send_chat_message",
+              description: "Envia uma mensagem para o chat da mesa no Firecast.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  message: { type: "string" },
+                  chat_id: { type: "string" },
+                  type: { type: "string", enum: ["standard", "narrator", "npc", "action", "laugh"] },
+                  npc_name: { type: "string" },
+                },
+                required: ["room_id", "message"],
+              },
+            },
+            {
+              name: "roll_dice",
+              description: "Executa uma rolagem de dados oficial dentro do chat da mesa no Firecast.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  expression: { type: "string" },
+                  chat_id: { type: "string" },
+                  message: { type: "string" },
+                },
+                required: ["room_id", "expression"],
               },
             },
           ],
@@ -127,6 +219,67 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
             return sendJson(400, { success: false, error: "Missing or invalid 'id' parameter" });
           }
           const result = await handleGetRoom(args.id, args.fresh === true);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_players") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number") {
+            return sendJson(400, { success: false, error: "Missing or invalid 'room_id' parameter" });
+          }
+          const result = await handleListPlayers(roomId, args.fresh === true);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_chats") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number") {
+            return sendJson(400, { success: false, error: "Missing or invalid 'room_id' parameter" });
+          }
+          const result = await handleListChats(roomId);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_chat_messages") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number") {
+            return sendJson(400, { success: false, error: "Missing or invalid 'room_id' parameter" });
+          }
+          const result = await handleGetChatMessages(
+            roomId,
+            args.chat_id ?? "main",
+            args.limit ?? 50,
+            args.fresh === true
+          );
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "send_chat_message") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.message !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'message' parameter" });
+          }
+          const result = await handleSendChatMessage({
+            roomId,
+            message: args.message,
+            chatId: args.chat_id,
+            type: args.type,
+            npcName: args.npc_name,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "roll_dice") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.expression !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'expression' parameter" });
+          }
+          const result = await handleRollDice({
+            roomId,
+            expression: args.expression,
+            chatId: args.chat_id,
+            message: args.message,
+          });
           return sendJson(200, { success: true, tool: toolName, result });
         }
 
@@ -157,7 +310,23 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         return sendJson(200, { count: events.length, events });
       }
 
-      // 7. Inspeção de arquivos em inbox: GET /inbox
+      // 7. Inspeção de mensagens de chat no banco: GET /db/messages
+      if (req.method === "GET" && (pathname === "/db/messages" || pathname.startsWith("/db/messages/"))) {
+        let roomId = url.searchParams.get("roomId") ? parseInt(url.searchParams.get("roomId")!, 10) : undefined;
+        if (!roomId && pathname.startsWith("/db/messages/")) {
+          const part = pathname.replace("/db/messages/", "");
+          if (part) roomId = parseInt(part, 10);
+        }
+        if (!roomId) {
+          return sendJson(400, { success: false, error: "Missing 'roomId' query parameter or path segment" });
+        }
+        const chatId = url.searchParams.get("chatId") ?? undefined;
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
+        const messages = getChatMessages(roomId, chatId, limit);
+        return sendJson(200, { count: messages.length, roomId, chatId: chatId ?? "all", messages });
+      }
+
+      // 8. Inspeção de arquivos em inbox: GET /inbox
       if (req.method === "GET" && pathname === "/inbox") {
         const files = fs.existsSync(inboxDir) ? fs.readdirSync(inboxDir) : [];
         return sendJson(200, { dir: inboxDir, count: files.length, files });

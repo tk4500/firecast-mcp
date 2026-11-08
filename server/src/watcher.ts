@@ -3,7 +3,7 @@
 
 import fs from "fs";
 import path from "path";
-import { getDb, upsertRoom, insertRoomEvent } from "./db.js";
+import { getDb, upsertRoom, insertRoomEvent, insertChatMessage } from "./db.js";
 
 type OutboxEvent = {
   id: string;
@@ -121,6 +121,23 @@ function handleEvent(event: OutboxEvent): void {
         kick_reason:       undefined,
         responsible_login: (data.responsible as Record<string, string> | undefined)?.login,
         ts:                event.ts,
+      });
+      break;
+    }
+
+    case "chat_message": {
+      insertChatMessage({
+        message_id: event.id,
+        room_id:    (data.room_id as number) ?? 0,
+        chat_id:    (data.chat_id as string) ?? "main",
+        chat_kind:  (data.chat_kind as string) ?? null,
+        sender:     data.sender as any,
+        mine:       !!data.mine,
+        type:       (data.type as string) ?? "standard",
+        content:    (data.content as string) ?? "",
+        npc:        (data.npc as string) ?? null,
+        roll:       data.roll as any,
+        ts:         event.ts,
       });
       break;
     }

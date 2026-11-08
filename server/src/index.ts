@@ -13,6 +13,7 @@ import { initDb } from "./db.js";
 import { initBridge } from "./bridge.js";
 import { startWatcher } from "./watcher.js";
 import { registerRoomTools } from "./tools/rooms.js";
+import { registerChatTools } from "./tools/chat.js";
 import { startHttpServer } from "./http.js";
 
 interface Config {
@@ -40,18 +41,23 @@ function resolveBridgePath(): string {
   if (process.env.FIRECAST_BRIDGE_PATH) {
     return path.resolve(process.env.FIRECAST_BRIDGE_PATH);
   }
-  if ((process as any).pkg) {
-    // Quando empacotado como server.exe, o executável fica em <VHD>/mcp/server.exe
-    return path.dirname(process.execPath);
-  }
 
-  // Em modo dev (node dist/index.js), tenta o VHD padrão do usuário se existir
+  // 1. Tenta o VHD padrão do Firecast no AppData do usuário (onde o plugin Firecast realmente roda)
   const appData = process.env.APPDATA;
   if (appData) {
     const vhdMcp = path.join(appData, "Firecast", "Plugins", "com.tkplayer.firecast_mcp_vhd", "mcp");
     if (fs.existsSync(vhdMcp)) {
       return vhdMcp;
     }
+  }
+
+  // 2. Se o executável estiver rodando dentro de um VHD específico
+  if ((process as any).pkg) {
+    const execDir = path.dirname(process.execPath);
+    if (execDir.toLowerCase().includes("firecast_mcp_vhd")) {
+      return execDir;
+    }
+    return execDir;
   }
 
   return process.cwd();
@@ -118,6 +124,7 @@ async function main(): Promise<void> {
 
     // Registra ferramentas do MCP
     registerRoomTools(server);
+    registerChatTools(server);
 
     process.stdin.on("close", () => process.exit(0));
     process.stdin.on("end", () => process.exit(0));
