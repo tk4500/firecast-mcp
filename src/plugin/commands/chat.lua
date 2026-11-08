@@ -60,38 +60,185 @@ local function timestampToEpoch(ts)
     return os.time();
 end
 
+local function serializeEntity(ent)
+    if ent == nil then return nil; end
+    local id = safeGet(ent, "userId") or safeGet(ent, "id");
+    local login = safeGet(ent, "login");
+    local nick = safeGet(ent, "nick");
+    local gender = safeGet(ent, "gender");
+    if id == nil and login == nil and nick == nil then return nil; end
+    return {
+        id     = id,
+        login  = login,
+        nick   = nick,
+        gender = gender,
+    };
+end
+
+local function serializeImpersonation(imp)
+    if imp == nil or type(imp) ~= "table" then return nil; end
+    local mode = safeGet(imp, "mode");
+    local name = safeGet(imp, "name");
+    local avatar = safeGet(imp, "avatar");
+    local gender = safeGet(imp, "gender");
+    if mode == nil and name == nil and avatar == nil then return nil; end
+    return {
+        mode   = mode or "none",
+        name   = name,
+        avatar = avatar,
+        gender = gender,
+    };
+end
+
+local function serializeVisibility(vis)
+    if vis == nil or type(vis) ~= "table" then return nil; end
+    local mode = safeGet(vis, "mode") or "standard";
+    local recipients = nil;
+    local rawRec = safeGet(vis, "recipients");
+    if type(rawRec) == "table" then
+        recipients = {};
+        for i = 1, #rawRec do
+            local r = rawRec[i];
+            if r ~= nil then table.insert(recipients, tonumber(r) or r); end
+        end
+    end
+    local blacklist = nil;
+    local rawBl = safeGet(vis, "blacklist");
+    if type(rawBl) == "table" then
+        blacklist = {};
+        for i = 1, #rawBl do
+            local b = rawBl[i];
+            if b ~= nil then table.insert(blacklist, tonumber(b) or b); end
+        end
+    end
+    return {
+        mode       = mode,
+        recipients = recipients,
+        blacklist  = blacklist,
+    };
+end
+
+local function serializeMedium(med)
+    if med == nil or type(med) ~= "table" then return nil; end
+    return {
+        kind      = safeGet(med, "kind"),
+        roomId    = safeGet(med, "roomId"),
+        groupId   = safeGet(med, "groupId"),
+        channelId = safeGet(med, "channelId"),
+        user1     = safeGet(med, "user1"),
+        user2     = safeGet(med, "user2"),
+    };
+end
+
+local function serializeMsgContent(rawMsg)
+    if rawMsg == nil or type(rawMsg) ~= "table" then return nil; end
+    local data = {
+        msgType         = safeGet(rawMsg, "msgType"),
+        content         = safeGet(rawMsg, "content"),
+        impersonation   = serializeImpersonation(safeGet(rawMsg, "impersonation")),
+        responsible     = serializeEntity(safeGet(rawMsg, "responsible")),
+        propertyId      = safeGet(rawMsg, "propertyId"),
+        oldValue        = safeGet(rawMsg, "oldValue"),
+        newValue        = safeGet(rawMsg, "newValue"),
+        fileName        = safeGet(rawMsg, "fileName"),
+        fileURL         = safeGet(rawMsg, "fileURL"),
+        fileMimeType    = safeGet(rawMsg, "fileMimeType"),
+        fileSize        = safeGet(rawMsg, "fileSize"),
+        joinType        = safeGet(rawMsg, "joinType"),
+        leaveType       = safeGet(rawMsg, "leaveType"),
+    };
+    if rawMsg.roll then
+        data.roll = serializeRoll(rawMsg.roll);
+    end
+    local topts = safeGet(rawMsg, "talemarkOptions");
+    if type(topts) == "table" then
+        data.talemarkOptions = {
+            parseCharActions = safeGet(topts, "parseCharActions"),
+            parseSmileys     = safeGet(topts, "parseSmileys"),
+            parseURL         = safeGet(topts, "parseURL"),
+        };
+    end
+    return data;
+end
+
 local function serializeLogRec(rec)
     if rec == nil then return nil; end
 
-    local entity = nil;
-    local rawEntity = safeGet(rec, "entity");
-    if rawEntity then
-        entity = {
-            id    = rawEntity.userId or rawEntity.id,
-            login = rawEntity.login,
-            nick  = rawEntity.nick,
-        };
-    end
-
-    local msgData = nil;
-    local rawMsg = safeGet(rec, "msg");
-    if rawMsg then
-        msgData = {
-            msgType = rawMsg.msgType,
-            content = rawMsg.content,
-        };
-        if rawMsg.roll then
-            msgData.roll = serializeRoll(rawMsg.roll);
-        end
-    end
+    local entity = serializeEntity(safeGet(rec, "entity"));
+    local msgData = serializeMsgContent(safeGet(rec, "msg"));
+    local vis = serializeVisibility(safeGet(rec, "visibility"));
+    local med = serializeMedium(safeGet(rec, "medium"));
+    local deleter = serializeEntity(safeGet(rec, "deleter"));
 
     return {
-        id        = safeGet(rec, "id"),
-        tid       = safeGet(rec, "tid"),
-        timestamp = timestampToEpoch(safeGet(rec, "timestamp")),
-        entity    = entity,
-        msg       = msgData,
+        id                = safeGet(rec, "id"),
+        tid               = safeGet(rec, "tid"),
+        timestamp         = timestampToEpoch(safeGet(rec, "timestamp")),
+        rawTimestamp      = safeGet(rec, "timestamp"),
+        medium            = med,
+        entity            = entity,
+        msg               = msgData,
+        visibility        = vis,
+        isDeleted         = safeGet(rec, "isDeleted"),
+        deleter           = deleter,
+        deletionTimestamp = timestampToEpoch(safeGet(rec, "deletionTimestamp")),
     };
+end
+
+local function buildSendMessageParams(args)
+    local params = nil;
+
+    -- Impersonation
+    local imp = nil;
+    if args.impersonation and type(args.impersonation) == "table" then
+        imp = {
+            mode   = args.impersonation.mode or "character",
+            name   = args.impersonation.name,
+            avatar = args.impersonation.avatar,
+            gender = args.impersonation.gender,
+        };
+    elseif args.npc_name or args.npc then
+        imp = {
+            mode   = "character",
+            name   = tostring(args.npc_name or args.npc),
+            avatar = args.npc_avatar or args.avatar,
+            gender = args.gender,
+        };
+    elseif args.type == "narrator" or args.type == "asnarrator" or args.type == "narracao" then
+        imp = {
+            mode   = "narrator",
+            avatar = args.avatar,
+            gender = args.gender,
+        };
+    end
+
+    -- Visibility (destinatários específicos / blacklist / sussurros)
+    local vis = nil;
+    if args.visibility and type(args.visibility) == "table" then
+        vis = {
+            mode       = args.visibility.mode or "standard",
+            recipients = args.visibility.recipients,
+            blacklist  = args.visibility.blacklist,
+        };
+    elseif args.recipients and type(args.recipients) == "table" then
+        vis = {
+            mode       = "recipients",
+            recipients = args.recipients,
+        };
+    end
+
+    -- TalemarkOptions
+    local talemark = args.talemarkOptions or args.talemark;
+
+    if imp ~= nil or vis ~= nil or talemark ~= nil then
+        params = {
+            impersonation   = imp,
+            visibility      = vis,
+            talemarkOptions = talemark,
+        };
+    end
+
+    return params;
 end
 
 local function getChatId(chat, mesa, idx)
@@ -316,6 +463,35 @@ function chatCommands.getChatMessages(args)
     end
 
     local limit = tonumber(args.limit) or 50;
+    if limit > 50 then limit = 50; end
+
+    -- Se solicitar consulta ao servidor ou especificar paginação por tid
+    if (args.server_query or args.tid or args.audit ~= nil) and type(c.asyncQueryLogRecs) == "function" then
+        local qParams = {
+            limit = limit,
+            audit = (args.audit == true),
+            tid   = args.tid,
+        };
+        return c:asyncQueryLogRecs(qParams):thenDo(function(response)
+            local result = {};
+            local rawRecs = safeGet(response, "logRecs");
+            if type(rawRecs) == "table" then
+                for i = 1, #rawRecs do
+                    local item = serializeLogRec(rawRecs[i]);
+                    if item ~= nil then table.insert(result, item); end
+                end
+            end
+            return {
+                room_id  = roomId,
+                chat_id  = args.chat_id or "main",
+                bof      = safeGet(response, "bof"),
+                count    = #result,
+                source   = "server_query",
+                messages = result,
+            };
+        end);
+    end
+
     local recs = nil;
     pcall(function() recs = c:readLogRecs(); end);
     local result = {};
@@ -335,11 +511,12 @@ function chatCommands.getChatMessages(args)
         room_id  = roomId,
         chat_id  = args.chat_id or "main",
         count    = #result,
+        source   = "local_buffer",
         messages = result,
     };
 end
 
--- send_chat_message: envia mensagem para o chat especificado
+-- send_chat_message: envia mensagem para o chat especificado com suporte a SendMessageParameters
 function chatCommands.sendChatMessage(args)
     local roomId = tonumber(args.room_id or args.id);
     if roomId == nil then
@@ -363,15 +540,75 @@ function chatCommands.sendChatMessage(args)
         error("chat not found: " .. tostring(args.chat_id or "main"));
     end
 
+    local params = buildSendMessageParams(args);
+
+    if msgType == "laugh" or msgType == "risada" or msgType == "rir" then
+        if type(c.asyncSendLaugh) == "function" then
+            return c:asyncSendLaugh(params):thenDo(function(logRec)
+                return {
+                    success = true,
+                    room_id = roomId,
+                    chat_id = args.chat_id or "main",
+                    type    = "laugh",
+                    logRec  = serializeLogRec(logRec),
+                };
+            end);
+        else
+            c:enviarRisada();
+            return {
+                success = true,
+                room_id = roomId,
+                chat_id = args.chat_id or "main",
+                type    = "laugh",
+            };
+        end
+    end
+
+    if msgType == "action" or msgType == "acao" then
+        if type(c.asyncSendAction) == "function" then
+            return c:asyncSendAction(msg, params):thenDo(function(logRec)
+                return {
+                    success = true,
+                    room_id = roomId,
+                    chat_id = args.chat_id or "main",
+                    type    = "action",
+                    message = msg,
+                    logRec  = serializeLogRec(logRec),
+                };
+            end);
+        else
+            c:enviarAcao(msg);
+            return {
+                success = true,
+                room_id = roomId,
+                chat_id = args.chat_id or "main",
+                type    = "action",
+                message = msg,
+            };
+        end
+    end
+
+    -- asyncSendStd aceita SendMessageParameters (impersonation, visibility, talemarkOptions)
+    if type(c.asyncSendStd) == "function" then
+        return c:asyncSendStd(msg, params):thenDo(function(logRec)
+            return {
+                success  = true,
+                room_id  = roomId,
+                chat_id  = args.chat_id or "main",
+                type     = msgType,
+                message  = msg,
+                npc_name = args.npc_name,
+                logRec   = serializeLogRec(logRec),
+            };
+        end);
+    end
+
+    -- Fallback legado caso asyncSendStd não exista
     if msgType == "narrator" or msgType == "asnarrator" or msgType == "narracao" then
         c:enviarNarracao(msg);
     elseif msgType == "npc" or msgType == "asnpc" then
         local npcName = tostring(args.npc_name or args.npc or "NPC");
         c:enviarMensagemNPC(npcName, msg);
-    elseif msgType == "action" or msgType == "acao" then
-        c:enviarAcao(msg);
-    elseif msgType == "laugh" or msgType == "risada" or msgType == "rir" then
-        c:enviarRisada();
     else
         c:enviarMensagem(msg);
     end
@@ -409,10 +646,11 @@ function chatCommands.rollDice(args, reply)
     end
 
     local descMsg = args.message or "";
+    local params = buildSendMessageParams(args);
 
     -- 1. Se c:asyncRoll estiver disponível (método assíncrono nativo com Promise no SDK3)
     if type(c.asyncRoll) == "function" then
-        return c:asyncRoll(expr, descMsg):thenDo(function(resultado, rollObj, logRec)
+        return c:asyncRoll(expr, descMsg, params):thenDo(function(resultado, rollObj, logRec)
             local finalRoll = rollObj or (logRec and logRec.msg and logRec.msg.roll);
             return {
                 success    = true,
@@ -422,6 +660,7 @@ function chatCommands.rollDice(args, reply)
                 total      = resultado or safeGet(finalRoll, "resultado"),
                 asString   = safeGet(finalRoll, "asString"),
                 roll       = serializeRoll(finalRoll),
+                logRec     = serializeLogRec(logRec),
             };
         end);
     end
@@ -534,16 +773,34 @@ function chatCommands.registerEvents(bridge)
                 rollData = serializeRoll(rollObj);
             end
 
+            local logRec = safeGet(msg, "logRec") or safeGet(msg, "record");
+            local serializedLogRec = nil;
+            if logRec then
+                serializedLogRec = serializeLogRec(logRec);
+            end
+
+            local imp = serializeImpersonation(safeGet(msg, "impersonation")) or (serializedLogRec and serializedLogRec.msg and serializedLogRec.msg.impersonation);
+            local vis = serializeVisibility(safeGet(msg, "visibility")) or (serializedLogRec and serializedLogRec.visibility);
+            local msgId = safeGet(msg, "id") or (serializedLogRec and serializedLogRec.id);
+            local tid = safeGet(msg, "tid") or (serializedLogRec and serializedLogRec.tid);
+            local fileUrl = safeGet(msg, "fileURL") or (serializedLogRec and serializedLogRec.msg and serializedLogRec.msg.fileURL);
+
             bridge.emit("chat_message", {
-                room_id   = roomId,
-                chat_id   = chatId,
-                chat_kind = chatKind,
-                mine      = safeGet(msg, "mine") or false,
-                type      = safeGet(msg, "type") or "standard",
-                content   = safeGet(msg, "content") or "",
-                npc       = safeGet(msg, "npc"),
-                sender    = sender,
-                roll      = rollData,
+                id            = msgId,
+                tid           = tid,
+                room_id       = roomId,
+                chat_id       = chatId,
+                chat_kind     = chatKind,
+                mine          = safeGet(msg, "mine") or false,
+                type          = safeGet(msg, "type") or (serializedLogRec and serializedLogRec.msg and serializedLogRec.msg.msgType) or "standard",
+                content       = safeGet(msg, "content") or (serializedLogRec and serializedLogRec.msg and serializedLogRec.msg.content) or "",
+                npc           = safeGet(msg, "npc") or (imp and imp.name),
+                impersonation = imp,
+                visibility    = vis,
+                file_url      = fileUrl,
+                sender        = sender or (serializedLogRec and serializedLogRec.entity),
+                roll          = rollData or (serializedLogRec and serializedLogRec.msg and serializedLogRec.msg.roll),
+                log_rec       = serializedLogRec,
             });
         end);
     end);

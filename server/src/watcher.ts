@@ -127,17 +127,22 @@ function handleEvent(event: OutboxEvent): void {
 
     case "chat_message": {
       insertChatMessage({
-        message_id: event.id,
-        room_id:    (data.room_id as number) ?? 0,
-        chat_id:    (data.chat_id as string) ?? "main",
-        chat_kind:  (data.chat_kind as string) ?? null,
-        sender:     data.sender as any,
-        mine:       !!data.mine,
-        type:       (data.type as string) ?? "standard",
-        content:    (data.content as string) ?? "",
-        npc:        (data.npc as string) ?? null,
-        roll:       data.roll as any,
-        ts:         event.ts,
+        message_id:    (data.id as string) ?? event.id,
+        tid:           data.tid as string,
+        room_id:       (data.room_id as number) ?? 0,
+        chat_id:       (data.chat_id as string) ?? "main",
+        chat_kind:     (data.chat_kind as string) ?? null,
+        sender:        data.sender as any,
+        mine:          !!data.mine,
+        type:          (data.type as string) ?? "standard",
+        content:       (data.content as string) ?? "",
+        npc:           (data.npc as string) ?? null,
+        impersonation: data.impersonation,
+        visibility:    data.visibility,
+        file_url:      data.file_url as string,
+        roll:          data.roll as any,
+        raw_json:      data.log_rec,
+        ts:            event.ts,
       });
       break;
     }

@@ -122,18 +122,25 @@ function migrate(): void {
     CREATE TABLE IF NOT EXISTS chat_messages (
       seq           INTEGER PRIMARY KEY AUTOINCREMENT,
       message_id    TEXT UNIQUE,
+      tid           TEXT,
       room_id       INTEGER,
       chat_id       TEXT,
       chat_kind     TEXT,
       sender_id     INTEGER,
       sender_login  TEXT,
       sender_nick   TEXT,
+      sender_gender TEXT,
       mine          INTEGER,
       type          TEXT,
       content       TEXT,
       npc_name      TEXT,
+      impersonation TEXT,
+      visibility    TEXT,
+      file_url      TEXT,
+      extra         TEXT,
       roll_result   INTEGER,
       roll_data     TEXT,
+      raw_json      TEXT,
       ts            INTEGER NOT NULL
     );
 
@@ -147,6 +154,27 @@ function migrate(): void {
   } catch {}
   try {
     db.run("ALTER TABLE rooms ADD COLUMN meu_jogador TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN tid TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN sender_gender TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN impersonation TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN visibility TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN file_url TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN extra TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE chat_messages ADD COLUMN raw_json TEXT");
   } catch {}
 }
 
@@ -283,33 +311,66 @@ export function getAllRoomEvents(limit = 100): RoomEventRow[] {
 export interface ChatMessageRow {
   seq?: number;
   message_id?: string | null;
+  tid?: string | null;
   room_id: number;
   chat_id: string;
   chat_kind?: string | null;
   sender_id?: number | null;
   sender_login?: string | null;
   sender_nick?: string | null;
+  sender_gender?: string | null;
   mine?: number;
   type?: string;
   content: string;
   npc_name?: string | null;
+  impersonation?: any;
+  visibility?: any;
+  file_url?: string | null;
+  extra?: any;
   roll_result?: number | null;
   roll_data?: string | null;
+  raw_json?: string | null;
   ts: number;
+}
+
+function formatChatMessageRow(row: any): ChatMessageRow {
+  if (!row) return row;
+  if (row.roll_data && typeof row.roll_data === "string") {
+    try { row.roll_data = JSON.parse(row.roll_data); } catch {}
+  }
+  if (row.impersonation && typeof row.impersonation === "string") {
+    try { row.impersonation = JSON.parse(row.impersonation); } catch {}
+  }
+  if (row.visibility && typeof row.visibility === "string") {
+    try { row.visibility = JSON.parse(row.visibility); } catch {}
+  }
+  if (row.extra && typeof row.extra === "string") {
+    try { row.extra = JSON.parse(row.extra); } catch {}
+  }
+  if (row.raw_json && typeof row.raw_json === "string") {
+    try { row.raw_json = JSON.parse(row.raw_json); } catch {}
+  }
+  return row as ChatMessageRow;
 }
 
 export function insertChatMessage(msg: {
   message_id?: string | null;
+  tid?: string | null;
   room_id: number;
   chat_id?: string | null;
   chat_kind?: string | null;
-  sender?: { id?: number; login?: string; nick?: string } | null;
+  sender?: { id?: number; login?: string; nick?: string; gender?: string } | null;
   mine?: boolean | number;
   type?: string;
   content?: string;
   npc?: string | null;
   npc_name?: string | null;
+  impersonation?: any;
+  visibility?: any;
+  file_url?: string | null;
+  extra?: any;
   roll?: { resultado?: number; asString?: string; ops?: any[] } | null;
+  raw_json?: any;
   ts?: number;
 }): void {
   const ts = msg.ts ?? Math.floor(Date.now() / 1000);
@@ -318,48 +379,64 @@ export function insertChatMessage(msg: {
   const mine = msg.mine ? 1 : 0;
   const rollResult = msg.roll?.resultado ?? null;
   const rollData = msg.roll ? JSON.stringify(msg.roll) : null;
-  const npcName = msg.npc_name ?? msg.npc ?? null;
+  const npcName = msg.npc_name ?? msg.npc ?? msg.impersonation?.name ?? null;
+  const impersonationStr = msg.impersonation ? JSON.stringify(msg.impersonation) : null;
+  const visibilityStr = msg.visibility ? JSON.stringify(msg.visibility) : null;
+  const extraStr = msg.extra ? JSON.stringify(msg.extra) : null;
+  const rawJsonStr = msg.raw_json ? JSON.stringify(msg.raw_json) : null;
 
   run(
     `INSERT OR IGNORE INTO chat_messages (
-      message_id, room_id, chat_id, chat_kind,
-      sender_id, sender_login, sender_nick,
+      message_id, tid, room_id, chat_id, chat_kind,
+      sender_id, sender_login, sender_nick, sender_gender,
       mine, type, content, npc_name,
-      roll_result, roll_data, ts
+      impersonation, visibility, file_url, extra,
+      roll_result, roll_data, raw_json, ts
     ) VALUES (
-      :message_id, :room_id, :chat_id, :chat_kind,
-      :sender_id, :sender_login, :sender_nick,
+      :message_id, :tid, :room_id, :chat_id, :chat_kind,
+      :sender_id, :sender_login, :sender_nick, :sender_gender,
       :mine, :type, :content, :npc_name,
-      :roll_result, :roll_data, :ts
+      :impersonation, :visibility, :file_url, :extra,
+      :roll_result, :roll_data, :raw_json, :ts
     )`,
     {
-      ":message_id":   messageId,
-      ":room_id":      msg.room_id,
-      ":chat_id":      chatId,
-      ":chat_kind":    msg.chat_kind ?? null,
-      ":sender_id":    msg.sender?.id ?? null,
-      ":sender_login": msg.sender?.login ?? null,
-      ":sender_nick":  msg.sender?.nick ?? null,
-      ":mine":         mine,
-      ":type":         msg.type ?? "standard",
-      ":content":      msg.content ?? "",
-      ":npc_name":     npcName,
-      ":roll_result":  rollResult,
-      ":roll_data":    rollData,
-      ":ts":           ts,
+      ":message_id":    messageId,
+      ":tid":           msg.tid ?? null,
+      ":room_id":       msg.room_id,
+      ":chat_id":       chatId,
+      ":chat_kind":     msg.chat_kind ?? null,
+      ":sender_id":     msg.sender?.id ?? null,
+      ":sender_login":  msg.sender?.login ?? null,
+      ":sender_nick":   msg.sender?.nick ?? null,
+      ":sender_gender": msg.sender?.gender ?? null,
+      ":mine":          mine,
+      ":type":          msg.type ?? "standard",
+      ":content":       msg.content ?? "",
+      ":npc_name":      npcName,
+      ":impersonation": impersonationStr,
+      ":visibility":    visibilityStr,
+      ":file_url":      msg.file_url ?? null,
+      ":extra":         extraStr,
+      ":roll_result":   rollResult,
+      ":roll_data":     rollData,
+      ":raw_json":      rawJsonStr,
+      ":ts":            ts,
     }
   );
 }
 
 export function getChatMessages(roomId: number, chatId?: string, limit = 50): ChatMessageRow[] {
+  let rows: any[];
   if (chatId && chatId !== "all") {
-    return query<ChatMessageRow>(
+    rows = query<any>(
       `SELECT * FROM chat_messages WHERE room_id = ? AND chat_id = ? ORDER BY ts ASC, seq ASC LIMIT ?`,
       [roomId, chatId, limit]
     );
+  } else {
+    rows = query<any>(
+      `SELECT * FROM chat_messages WHERE room_id = ? ORDER BY ts ASC, seq ASC LIMIT ?`,
+      [roomId, limit]
+    );
   }
-  return query<ChatMessageRow>(
-    `SELECT * FROM chat_messages WHERE room_id = ? ORDER BY ts ASC, seq ASC LIMIT ?`,
-    [roomId, limit]
-  );
+  return rows.map(formatChatMessageRow);
 }

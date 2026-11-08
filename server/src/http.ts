@@ -243,13 +243,18 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         if (toolName === "get_chat_messages") {
           const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
           if (typeof roomId !== "number") {
-            return sendJson(400, { success: false, error: "Missing or invalid 'room_id' parameter" });
+            return sendJson(400, { success: false, error: "Missing 'room_id' parameter" });
           }
           const result = await handleGetChatMessages(
             roomId,
             args.chat_id ?? "main",
             args.limit ?? 50,
-            args.fresh === true
+            args.fresh === true,
+            {
+              serverQuery: args.server_query === true,
+              tid: args.tid,
+              audit: args.audit === true,
+            }
           );
           return sendJson(200, { success: true, tool: toolName, result });
         }
@@ -265,6 +270,11 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
             chatId: args.chat_id,
             type: args.type,
             npcName: args.npc_name,
+            avatar: args.avatar,
+            gender: args.gender,
+            impersonation: args.impersonation,
+            visibility: args.visibility,
+            talemarkOptions: args.talemark_options,
           });
           return sendJson(200, { success: true, tool: toolName, result });
         }
@@ -279,6 +289,8 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
             expression: args.expression,
             chatId: args.chat_id,
             message: args.message,
+            impersonation: args.impersonation,
+            visibility: args.visibility,
           });
           return sendJson(200, { success: true, tool: toolName, result });
         }
