@@ -189,48 +189,66 @@ local function applyNodeOperations(rootNode, operations)
             local pathStr = op.path;
             local value = op.value;
 
-            if not pathStr or pathStr == "" then
-                error("Missing path in operation #" .. tostring(i));
-            end
-
-            -- Separa o caminho em diretórios e chave final
-            local parts = {};
-            for segment in string.gmatch(pathStr, "[^.%/]+") do
-                table.insert(parts, segment);
-            end
-
-            if #parts == 0 then
-                error("Invalid path: " .. tostring(pathStr));
-            end
-
-            local finalKey = parts[#parts];
-            local targetNode = rootNode;
-
-            -- Navega até o penúltimo nodo, criando filhos se necessário no caso de 'set'
-            for p = 1, #parts - 1 do
-                local seg = parts[p];
-                local nextTarget = targetNode[seg];
-                if nextTarget == nil then
-                    if action == "set" then
-                        targetNode[seg] = {};
-                        nextTarget = targetNode[seg];
-                    else
-                        targetNode = nil;
-                        break
-                    end
-                end
-                targetNode = nextTarget;
-            end
-
-            if targetNode ~= nil then
+            if not pathStr or pathStr == "" or pathStr == "." or pathStr == "/" then
                 if action == "set" then
-                    targetNode[finalKey] = value;
-                    appliedCount = appliedCount + 1;
+                    if type(value) == "table" then
+                        for k, v in pairs(value) do
+                            rootNode[k] = v;
+                            appliedCount = appliedCount + 1;
+                        end
+                    else
+                        error("Root set operation requires a table value");
+                    end
                 elseif action == "delete" then
-                    targetNode[finalKey] = nil;
-                    appliedCount = appliedCount + 1;
+                    local childNodes = NDB.getChildNodes(rootNode);
+                    if childNodes then
+                        for _, child in ipairs(childNodes) do
+                            NDB.deleteNode(child);
+                        end
+                    end
                 else
-                    error("Unknown action: " .. tostring(action));
+                    error("Unknown action on root node: " .. tostring(action));
+                end
+            else
+                -- Separa o caminho em diretórios e chave final
+                local parts = {};
+                for segment in string.gmatch(pathStr, "[^.%/]+") do
+                    table.insert(parts, segment);
+                end
+
+                if #parts == 0 then
+                    error("Invalid path: " .. tostring(pathStr));
+                end
+
+                local finalKey = parts[#parts];
+                local targetNode = rootNode;
+
+                -- Navega até o penúltimo nodo, criando filhos se necessário no caso de 'set'
+                for p = 1, #parts - 1 do
+                    local seg = parts[p];
+                    local nextTarget = targetNode[seg];
+                    if nextTarget == nil then
+                        if action == "set" then
+                            targetNode[seg] = {};
+                            nextTarget = targetNode[seg];
+                        else
+                            targetNode = nil;
+                            break
+                        end
+                    end
+                    targetNode = nextTarget;
+                end
+
+                if targetNode ~= nil then
+                    if action == "set" then
+                        targetNode[finalKey] = value;
+                        appliedCount = appliedCount + 1;
+                    elseif action == "delete" then
+                        targetNode[finalKey] = nil;
+                        appliedCount = appliedCount + 1;
+                    else
+                        error("Unknown action: " .. tostring(action));
+                    end
                 end
             end
         end

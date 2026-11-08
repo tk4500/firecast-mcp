@@ -4,6 +4,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sendCommand } from "../bridge.js";
+import { extractSheetTemplate } from "../template.js";
 
 const TEST_ROOM_ID = 239256; // Mesa 'tttttaaaaa'
 
@@ -185,6 +186,94 @@ export async function handleManageRoom(params: {
     },
     30_000
   );
+}
+
+export async function handleGetSheetTemplate(params: { dataType: string }): Promise<unknown> {
+  const template = extractSheetTemplate(params.dataType);
+  if (!template) {
+    throw new Error(`Template not found for dataType or RPK: '${params.dataType}'`);
+  }
+  return template;
+}
+
+export async function handleCreateCharacterSheet(params: {
+  roomId: number;
+  name: string;
+  dataType: string;
+  parentCodigo?: number;
+  autoStructure?: boolean;
+  initialData?: Record<string, unknown>;
+}): Promise<unknown> {
+  if (params.roomId !== TEST_ROOM_ID) {
+    throw new Error(
+      `Safety guard: character sheet creation is restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
+    );
+  }
+
+  // 1. Create character item in library
+  const createResult: any = await handleManageLibraryItem({
+    roomId: params.roomId,
+    action: "create_char",
+    name: params.name,
+    dataType: params.dataType,
+    parentCodigo: params.parentCodigo,
+  });
+
+  const charItem = createResult?.item;
+  const codigoInterno = charItem?.codigoInterno;
+
+  if (!codigoInterno) {
+    return {
+      success: false,
+      error: "Character created but no codigoInterno returned",
+      createResult,
+    };
+  }
+
+  // 2. If autoStructure is requested (default true), populate NDB structure
+  let templateInfo = null;
+  let populatedData = null;
+  if (params.autoStructure !== false) {
+    const template = extractSheetTemplate(params.dataType);
+    if (template) {
+      templateInfo = {
+        dataType: template.dataType,
+        pluginName: template.pluginName,
+        rpkFile: template.rpkFile,
+        totalFields: template.totalDirectFields,
+        totalLists: template.totalLists,
+      };
+
+      const dataToSet = JSON.parse(JSON.stringify(template.defaultData));
+      if (params.initialData && typeof params.initialData === "object") {
+        for (const [k, v] of Object.entries(params.initialData)) {
+          dataToSet[k] = v;
+        }
+      }
+      populatedData = dataToSet;
+
+      // Apply to NDB
+      await handleEditSheetNDB({
+        roomId: params.roomId,
+        codigoInterno,
+        operations: [
+          {
+            action: "set",
+            path: "",
+            value: dataToSet,
+          },
+        ],
+      });
+    }
+  }
+
+  return {
+    success: true,
+    item: charItem,
+    template: templateInfo,
+    structured: !!templateInfo,
+    initialData: populatedData,
+  };
 }
 
 // Registro no MCP Server
@@ -469,6 +558,73 @@ export function registerNdbTools(server: McpServer): void {
         roomId: room_id,
         action,
         moderada,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // 9. get_sheet_template
+  server.tool(
+    "get_sheet_template",
+    "Inspeciona e extrai o schema completo de um modelo de ficha (RPK/LFM) instalado no Firecast pelo dataType ou nome. Retorna todos os campos diretos, módulos, recordLists de sub-itens e a estrutura padrão em JSON.",
+    {
+      data_type: z
+        .string()
+        .describe("dataType do modelo de ficha (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.Nefertyne.FichaMultiaba', 'Ambesek.T20', 'br.com.cherryth.SoloLevelingRPG') ou nome do arquivo RPK"),
+    },
+    async ({ data_type }) => {
+      const result = await handleGetSheetTemplate({
+        dataType: data_type,
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // 10. create_character_sheet (Trava de segurança: apenas na mesa 239256)
+  server.tool(
+    "create_character_sheet",
+    "Cria um novo personagem na biblioteca com um modelo de ficha específico e opcionalmente inicializa toda a estrutura de nós (NDB) com base no template extraído do RPK (com suporte a módulos, abas e recordLists). Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    {
+      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      name: z.string().describe("Nome do personagem a ser criado"),
+      data_type: z
+        .string()
+        .describe("dataType do modelo de ficha (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.Nefertyne.FichaMultiaba', 'Ambesek.T20')"),
+      parent_codigo: z
+        .number()
+        .optional()
+        .describe("codigoInterno da pasta destino na biblioteca"),
+      auto_structure: z
+        .boolean()
+        .optional()
+        .describe("Se true (padrão), extrai o template do RPK e inicializa toda a estrutura do NDB no banco de dados."),
+      initial_data: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("Objeto com valores iniciais para mesclar sobre a estrutura padrão da ficha (ex: { nome: 'Conan', atributos: { forca: 18 } })"),
+    },
+    async ({ room_id, name, data_type, parent_codigo, auto_structure, initial_data }) => {
+      const result = await handleCreateCharacterSheet({
+        roomId: room_id,
+        name,
+        dataType: data_type,
+        parentCodigo: parent_codigo,
+        autoStructure: auto_structure,
+        initialData: initial_data,
       });
       return {
         content: [

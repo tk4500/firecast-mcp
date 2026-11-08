@@ -21,6 +21,8 @@ import {
   handleEditDockNDB,
   handleManageLibraryItem,
   handleManageRoom,
+  handleGetSheetTemplate,
+  handleCreateCharacterSheet,
 } from "./tools/ndb.js";
 import {
   handleListDataTypes,
@@ -380,6 +382,33 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
                 },
               },
             },
+            {
+              name: "get_sheet_template",
+              description: "Inspeciona e extrai o schema completo de um modelo de ficha (RPK/LFM) instalado no Firecast pelo dataType ou nome.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  data_type: { type: "string" },
+                },
+                required: ["data_type"],
+              },
+            },
+            {
+              name: "create_character_sheet",
+              description: "Cria um novo personagem na biblioteca e inicializa toda a estrutura de nós (NDB) do template RPK.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  name: { type: "string" },
+                  data_type: { type: "string" },
+                  parent_codigo: { type: "integer" },
+                  auto_structure: { type: "boolean" },
+                  initial_data: { type: "object" },
+                },
+                required: ["room_id", "name", "data_type"],
+              },
+            },
           ],
         });
       }
@@ -604,6 +633,32 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         if (toolName === "list_installed_plugins") {
           const result = await handleListInstalledPlugins({
             query: args.query,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_sheet_template") {
+          if (typeof args.data_type !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'data_type' parameter" });
+          }
+          const result = await handleGetSheetTemplate({
+            dataType: args.data_type,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "create_character_sheet") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.name !== "string" || typeof args.data_type !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id', 'name', or 'data_type' parameter" });
+          }
+          const result = await handleCreateCharacterSheet({
+            roomId,
+            name: args.name,
+            dataType: args.data_type,
+            parentCodigo: args.parent_codigo,
+            autoStructure: args.auto_structure,
+            initialData: args.initial_data,
           });
           return sendJson(200, { success: true, tool: toolName, result });
         }
