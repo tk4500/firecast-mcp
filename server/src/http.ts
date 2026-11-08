@@ -12,6 +12,20 @@ import {
   handleSendChatMessage,
   handleRollDice,
 } from "./tools/chat.js";
+import {
+  handleListLibrary,
+  handleGetLibraryItem,
+  handleGetSheetNDB,
+  handleEditSheetNDB,
+  handleOpenDockNDB,
+  handleEditDockNDB,
+  handleManageLibraryItem,
+  handleManageRoom,
+} from "./tools/ndb.js";
+import {
+  handleListDataTypes,
+  handleListInstalledPlugins,
+} from "./tools/plugins.js";
 import { sendCommand } from "./bridge.js";
 
 export interface HttpServerOptions {
@@ -115,6 +129,46 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
               description: "Executa uma rolagem de dados oficial dentro do chat da mesa no Firecast.",
               params: { room_id: "number", expression: "string", chat_id: "string (opcional)", message: "string (opcional)" },
             },
+            {
+              name: "list_library",
+              description: "Lista itens ou árvore da Biblioteca de uma mesa.",
+              params: { room_id: "number", parent_codigo: "number (opcional)", recursive: "boolean (opcional)", max_depth: "number (opcional)" },
+            },
+            {
+              name: "get_library_item",
+              description: "Obtém detalhes de um item específico da biblioteca (pasta ou personagem).",
+              params: { room_id: "number", codigo_interno: "number" },
+            },
+            {
+              name: "get_sheet_ndb",
+              description: "Abre o Node Database (NDB) de uma ficha de personagem e retorna seus dados.",
+              params: { room_id: "number", codigo_interno: "number", path: "string (opcional)" },
+            },
+            {
+              name: "edit_sheet_ndb",
+              description: "Modifica atributos ou sub-nós no NDB de uma ficha (exclusivo mesa tttttaaaaa).",
+              params: { room_id: "number", codigo_interno: "number", operations: "array de {action, path, value}" },
+            },
+            {
+              name: "open_dock_ndb",
+              description: "Abre um Node Database de janela acoplável (Dock NDB) ou de usuário.",
+              params: { room_id: "number", name: "string", is_user: "boolean (opcional)" },
+            },
+            {
+              name: "edit_dock_ndb",
+              description: "Modifica atributos ou sub-nós em um Dock NDB (exclusivo mesa tttttaaaaa).",
+              params: { room_id: "number", name: "string", operations: "array de {action, path, value}", is_user: "boolean (opcional)" },
+            },
+            {
+              name: "manage_library_item",
+              description: "Cria pastas/personagens, atualiza, move ou deleta na biblioteca (exclusivo mesa tttttaaaaa).",
+              params: { room_id: "number", action: "create_dir|create_char|update|delete|move", parent_codigo: "number", codigo_interno: "number", name: "string" },
+            },
+            {
+              name: "manage_room",
+              description: "Lê detalhes ou altera configurações administrativas da mesa (exclusivo mesa tttttaaaaa).",
+              params: { room_id: "number", action: "get_details|set_moderada", moderada: "boolean (opcional)" },
+            },
           ],
         });
       }
@@ -196,6 +250,134 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
                   message: { type: "string" },
                 },
                 required: ["room_id", "expression"],
+              },
+            },
+            {
+              name: "list_library",
+              description: "Lista itens ou árvore da Biblioteca de uma mesa.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  parent_codigo: { type: "integer" },
+                  recursive: { type: "boolean" },
+                  max_depth: { type: "integer" },
+                },
+                required: ["room_id"],
+              },
+            },
+            {
+              name: "get_library_item",
+              description: "Obtém detalhes de um item específico da biblioteca (pasta ou personagem).",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                },
+                required: ["room_id", "codigo_interno"],
+              },
+            },
+            {
+              name: "get_sheet_ndb",
+              description: "Abre o Node Database (NDB) de uma ficha de personagem e retorna seus dados.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  path: { type: "string" },
+                },
+                required: ["room_id", "codigo_interno"],
+              },
+            },
+            {
+              name: "edit_sheet_ndb",
+              description: "Modifica atributos ou sub-nós no NDB de uma ficha (exclusivo mesa tttttaaaaa).",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  operations: { type: "array" },
+                },
+                required: ["room_id", "codigo_interno", "operations"],
+              },
+            },
+            {
+              name: "open_dock_ndb",
+              description: "Abre um Node Database de janela acoplável (Dock NDB) ou de usuário.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  name: { type: "string" },
+                  is_user: { type: "boolean" },
+                },
+                required: ["room_id", "name"],
+              },
+            },
+            {
+              name: "edit_dock_ndb",
+              description: "Modifica atributos ou sub-nós em um Dock NDB (exclusivo mesa tttttaaaaa).",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  name: { type: "string" },
+                  operations: { type: "array" },
+                  is_user: { type: "boolean" },
+                },
+                required: ["room_id", "name", "operations"],
+              },
+            },
+            {
+              name: "manage_library_item",
+              description: "Cria pastas/personagens, atualiza, move ou deleta na biblioteca (exclusivo mesa tttttaaaaa).",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  action: { type: "string", enum: ["create_dir", "create_char", "update", "delete", "move"] },
+                  parent_codigo: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  name: { type: "string" },
+                },
+                required: ["room_id", "action"],
+              },
+            },
+            {
+              name: "manage_room",
+              description: "Lê detalhes ou altera configurações administrativas da mesa (exclusivo mesa tttttaaaaa).",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  action: { type: "string", enum: ["get_details", "set_moderada"] },
+                  moderada: { type: "boolean" },
+                },
+                required: ["room_id", "action"],
+              },
+            },
+            {
+              name: "list_data_types",
+              description: "Lista todos os tipos de dados / modelos de fichas (dataTypes) instalados no Firecast.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  form_type: { type: "string" },
+                  query: { type: "string" },
+                },
+              },
+            },
+            {
+              name: "list_installed_plugins",
+              description: "Lista todos os plugins SDK3 instalados no cliente Firecast.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                },
               },
             },
           ],
@@ -291,6 +473,137 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
             message: args.message,
             impersonation: args.impersonation,
             visibility: args.visibility,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        // --- NDB e Biblioteca Tools ---
+        if (toolName === "list_library") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' parameter" });
+          }
+          const result = await handleListLibrary({
+            roomId,
+            parentCodigo: args.parent_codigo,
+            recursive: args.recursive === true,
+            maxDepth: args.max_depth,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_library_item") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          const codigoInterno = args.codigo_interno;
+          if (typeof roomId !== "number" || typeof codigoInterno !== "number") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'codigo_interno' parameter" });
+          }
+          const result = await handleGetLibraryItem({ roomId, codigoInterno });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_sheet_ndb") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          const codigoInterno = args.codigo_interno;
+          if (typeof roomId !== "number" || typeof codigoInterno !== "number") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'codigo_interno' parameter" });
+          }
+          const result = await handleGetSheetNDB({
+            roomId,
+            codigoInterno,
+            path: args.path,
+            rawXml: args.raw_xml === true,
+            maxDepth: args.max_depth,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "edit_sheet_ndb") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          const codigoInterno = args.codigo_interno;
+          if (typeof roomId !== "number" || typeof codigoInterno !== "number" || !Array.isArray(args.operations)) {
+            return sendJson(400, { success: false, error: "Missing required 'room_id', 'codigo_interno' or 'operations'" });
+          }
+          const result = await handleEditSheetNDB({
+            roomId,
+            codigoInterno,
+            operations: args.operations,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "open_dock_ndb") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.name !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'name' parameter" });
+          }
+          const result = await handleOpenDockNDB({
+            roomId,
+            name: args.name,
+            isUser: args.is_user === true,
+            create: args.create !== false,
+            path: args.path,
+            rawXml: args.raw_xml === true,
+            maxDepth: args.max_depth,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "edit_dock_ndb") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.name !== "string" || !Array.isArray(args.operations)) {
+            return sendJson(400, { success: false, error: "Missing required 'room_id', 'name' or 'operations'" });
+          }
+          const result = await handleEditDockNDB({
+            roomId,
+            name: args.name,
+            operations: args.operations,
+            isUser: args.is_user === true,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "manage_library_item") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.action !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'action' parameter" });
+          }
+          const result = await handleManageLibraryItem({
+            roomId,
+            action: args.action,
+            parentCodigo: args.parent_codigo,
+            codigoInterno: args.codigo_interno,
+            name: args.name,
+            dataType: args.data_type,
+            changes: args.changes,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "manage_room") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number" || typeof args.action !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'room_id' or 'action' parameter" });
+          }
+          const result = await handleManageRoom({
+            roomId,
+            action: args.action,
+            moderada: args.moderada,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_data_types") {
+          const result = await handleListDataTypes({
+            formType: args.form_type,
+            query: args.query,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_installed_plugins") {
+          const result = await handleListInstalledPlugins({
+            query: args.query,
           });
           return sendJson(200, { success: true, tool: toolName, result });
         }

@@ -14,6 +14,8 @@ import { initBridge } from "./bridge.js";
 import { startWatcher } from "./watcher.js";
 import { registerRoomTools } from "./tools/rooms.js";
 import { registerChatTools } from "./tools/chat.js";
+import { registerNdbTools } from "./tools/ndb.js";
+import { registerPluginsTools } from "./tools/plugins.js";
 import { startHttpServer } from "./http.js";
 
 interface Config {
@@ -125,6 +127,8 @@ async function main(): Promise<void> {
     // Registra ferramentas do MCP
     registerRoomTools(server);
     registerChatTools(server);
+    registerNdbTools(server);
+    registerPluginsTools(server);
 
     process.stdin.on("close", () => process.exit(0));
     process.stdin.on("end", () => process.exit(0));

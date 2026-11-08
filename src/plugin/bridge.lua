@@ -60,7 +60,7 @@ end
 -- type: string (ex: "room_joined", "command_result", "chat_message")
 -- payload: table
 function bridge.emit(eventType, payload)
-    pcall(function()
+    local ok, err = pcall(function()
         local ts = os.time();
         local id = (payload and payload.id) or (tostring(ts) .. math.random(1000, 9999));
         local fileName = OUTBOX_DIR .. ts .. "-" .. id .. "." .. eventType .. ".json";
@@ -79,6 +79,12 @@ function bridge.emit(eventType, payload)
             file:close();
         end
     end);
+    if not ok then
+        pcall(function()
+            local Log = require("sdk/log.lua");
+            Log.e("FirecastMCP", "Erro em bridge.emit: " .. tostring(err));
+        end);
+    end
 end
 
 -- Callback chamado pelo timer: processa inbox
@@ -90,6 +96,15 @@ end
 
 function bridge.tick()
     local items = drainInbox();
+    if #items > 0 then
+        pcall(function()
+            local f = VHD.openFile("/mcp/debug.txt", "a");
+            if f ~= nil then
+                f:writeBinary("utf8", "tick processing " .. tostring(#items) .. " items at " .. tostring(os.time()) .. "\n");
+                f:close();
+            end
+        end);
+    end
     for _, item in ipairs(items) do
         local handler = commandHandlers[item.command];
         if handler then

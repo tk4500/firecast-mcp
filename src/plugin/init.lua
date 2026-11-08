@@ -2,9 +2,11 @@
 -- Entry point do plugin Firecast MCP
 -- Inicializa a bridge, gerencia o config.json, atualiza o server.exe no VHD e expõe comandos de chat.
 
-local bridge   = require("plugin/bridge.lua");
-local rooms    = require("plugin/commands/rooms.lua");
-local chat     = require("plugin/commands/chat.lua");
+local bridge = require("plugin/bridge.lua");
+local rooms  = require("plugin/commands/rooms.lua");
+local chat   = require("plugin/commands/chat.lua");
+local ndb    = require("plugin/commands/ndb.lua");
+local pluginsCmd = require("plugin/commands/plugins.lua");
 local rrpgObjs = require("sdk/rrpgObjs.lua");
 local Firecast = require("sdk/firecast.lua");
 local VHD      = require("sdk/vhd.lua");
@@ -56,38 +58,42 @@ end
 
 -- 2. Copia / Atualiza o server.exe do RPK para o VHD gravável
 local function deployServer()
-    local SRC = "/server.exe";      -- raiz do .rpk
-    local DST = "/mcp/server.exe";  -- destino gravável no VHD
+    pcall(function()
+        local SRC = "/server.exe";      -- raiz do .rpk
+        local DST = "/mcp/server.exe";  -- destino gravável no VHD
 
-    if not VHD.fileExists(SRC) then
-        return;
-    end
+        if not VHD.fileExists(SRC) then
+            return;
+        end
 
-    local srcFile = VHD.openFile(SRC, "r");
-    if srcFile == nil then return; end
-    local srcSize = srcFile.size;
-    srcFile:close();
+        local srcFile = nil;
+        pcall(function() srcFile = VHD.openFile(SRC, "r"); end);
+        if srcFile == nil then return; end
+        local srcSize = srcFile.size;
+        pcall(function() srcFile:close(); end);
 
-    local needsCopy = true;
-    if VHD.fileExists(DST) then
-        local dstFile = VHD.openFile(DST, "r");
-        if dstFile ~= nil then
-            local dstSize = dstFile.size;
-            dstFile:close();
-            if dstSize == srcSize and srcSize > 0 then
-                needsCopy = false;
+        local needsCopy = true;
+        if VHD.fileExists(DST) then
+            local dstFile = nil;
+            pcall(function() dstFile = VHD.openFile(DST, "r"); end);
+            if dstFile ~= nil then
+                local dstSize = dstFile.size;
+                pcall(function() dstFile:close(); end);
+                if dstSize == srcSize and srcSize > 0 then
+                    needsCopy = false;
+                end
             end
         end
-    end
 
-    if needsCopy then
-        VHD.forceDirectory("/mcp");
-        local ok, err = pcall(VHD.copyFile, SRC, DST);
-        if not ok then
-            local Log = require("sdk/log.lua");
-            Log.e("FirecastMCP", "Erro ao copiar server.exe: " .. tostring(err));
+        if needsCopy then
+            VHD.forceDirectory("/mcp");
+            local ok, err = pcall(VHD.copyFile, SRC, DST);
+            if not ok then
+                local Log = require("sdk/log.lua");
+                Log.e("FirecastMCP", "Erro ao copiar server.exe: " .. tostring(err));
+            end
         end
-    end
+    end);
 end
 
 -- 3. Registra comandos de chat /mcp para configuração interativa no Firecast
@@ -151,6 +157,20 @@ local function registerCommands()
     bridge.registerCommand("get_chat_messages", chat.getChatMessages);
     bridge.registerCommand("send_chat_message", chat.sendChatMessage);
     bridge.registerCommand("roll_dice",         chat.rollDice);
+
+    -- Comandos de Biblioteca e NDB
+    bridge.registerCommand("list_library",        ndb.list_library);
+    bridge.registerCommand("get_library_item",    ndb.get_library_item);
+    bridge.registerCommand("get_sheet_ndb",       ndb.get_sheet_ndb);
+    bridge.registerCommand("edit_sheet_ndb",      ndb.edit_sheet_ndb);
+    bridge.registerCommand("open_dock_ndb",       ndb.open_dock_ndb);
+    bridge.registerCommand("edit_dock_ndb",       ndb.edit_dock_ndb);
+    bridge.registerCommand("manage_library_item", ndb.manage_library_item);
+    bridge.registerCommand("manage_room",         ndb.manage_room);
+
+    -- Comandos de Plugins e Modelos de Fichas (DataTypes)
+    bridge.registerCommand("list_data_types",     pluginsCmd.list_data_types);
+    bridge.registerCommand("list_plugins",        pluginsCmd.list_plugins);
 end
 
 -- 5. Registra os listeners de eventos
@@ -159,26 +179,64 @@ local function registerEvents()
     chat.registerEvents(bridge);
 end
 
+local function logDebug(msg)
+    pcall(function()
+        local f = VHD.openFile("/mcp/debug.txt", "a");
+        if f ~= nil then
+            f:writeBinary("utf8", msg);
+            f:close();
+        end
+    end);
+end
+
 -- 6. Inicialização geral do plugin
 local function init()
-    bridge.init();
+    pcall(function()
+        VHD.forceDirectory("/mcp");
+        local f = VHD.openFile("/mcp/debug.txt", "w+");
+        if f ~= nil then
+            f:writeBinary("utf8", "init() called at " .. tostring(os.time()) .. "\n");
+            f:close();
+        end
+    end);
 
-    -- Garante que config.json existe no VHD desde o primeiro boot
-    local cfg = loadConfig();
-    saveConfig(cfg);
+    local ok, err = pcall(bridge.init);
+    logDebug("bridge.init: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
 
-    deployServer();
-    registerChatCommands();
-    registerCommands();
-    registerEvents();
+    ok, err = pcall(function()
+        local cfg = loadConfig();
+        saveConfig(cfg);
+    end);
+    logDebug("config: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
 
-    -- Timer de polling da bridge (armazenado em _G para imunidade total ao GC)
+    ok, err = pcall(deployServer);
+    logDebug("deployServer: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
+
+    ok, err = pcall(registerChatCommands);
+    logDebug("registerChatCommands: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
+
+    ok, err = pcall(registerCommands);
+    logDebug("registerCommands: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
+
+    ok, err = pcall(registerEvents);
+    logDebug("registerEvents: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
+
     if _G._firecastMcpTimer ~= nil then
         pcall(function() _G._firecastMcpTimer:setEnabled(false); end);
     end
+
+    local tickCount = 0;
     _G._firecastMcpTimer = rrpgObjs.newTimer(POLL_INTERVAL_MS, function()
-        bridge.tick();
+        tickCount = tickCount + 1;
+        if tickCount <= 3 then
+            logDebug("Timer ticked (" .. tostring(tickCount) .. ") at " .. tostring(os.time()) .. "\n");
+        end
+        local okT, errT = pcall(bridge.tick);
+        if not okT then
+            logDebug("tick error: " .. tostring(errT) .. "\n");
+        end
     end);
+    logDebug("Timer created!\n");
 end
 
 init();

@@ -15,9 +15,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@types/sql.js": "^1.4.11",
+    "adm-zip": "^0.6.1",
     "sql.js": "^1.15.2"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.0.0",
     "pkg": "^5.8.1",
     "tsx": "^4.0.0",
