@@ -26,24 +26,27 @@ local function drainInbox()
 
     for i = 1, #entries do
         local entry = entries[i];
-        if not entry.isDirectory then
-            local fileName = INBOX_DIR .. entry.name;
-            local file = VHD.openFile(fileName, "r");
-            if file ~= nil then
-                local content = file:readBinary("utf8");
-                file:close();
-                VHD.deleteFile(fileName);
+        local entryName = (type(entry) == "table") and entry.name or entry;
+        if type(entryName) == "string" and entryName ~= "" then
+            local fileName = INBOX_DIR .. entryName;
+            if VHD.fileExists(fileName) then
+                local file = VHD.openFile(fileName, "r");
+                if file ~= nil then
+                    local content = file:readBinary("utf8");
+                    file:close();
+                    VHD.deleteFile(fileName);
 
-                if content ~= nil and content ~= "" then
-                    local ok, data = pcall(json.decode, content);
-                    if ok and data then
-                        -- nome do arquivo: <id>.<command>.json
-                        -- extrai command do nome para evitar parsear o JSON para roteamento
-                        local id, command = string.match(entry.name, "^(.-)%.(.-)%.json$");
-                        if id and command then
-                            data.id      = data.id or id;
-                            data.command = data.command or command;
-                            table.insert(items, data);
+                    if content ~= nil and content ~= "" then
+                        local ok, data = pcall(json.decode, content);
+                        if ok and data then
+                            -- nome do arquivo: <id>.<command>.json
+                            -- extrai command do nome para evitar parsear o JSON para roteamento
+                            local id, command = string.match(entryName, "^(.-)%.(.-)%.json$");
+                            if id and command then
+                                data.id      = data.id or id;
+                                data.command = data.command or command;
+                                table.insert(items, data);
+                            end
                         end
                     end
                 end

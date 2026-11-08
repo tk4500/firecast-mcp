@@ -97,6 +97,8 @@ function migrate(): void {
       is_restrito  INTEGER,
       is_moderada  INTEGER,
       firecast_uri TEXT,
+      players      TEXT,
+      meu_jogador  TEXT,
       updated_at   INTEGER
     );
 
@@ -117,6 +119,13 @@ function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_room_events_room ON room_events(room_id);
     CREATE INDEX IF NOT EXISTS idx_room_events_ts   ON room_events(ts);
   `);
+
+  try {
+    db.run("ALTER TABLE rooms ADD COLUMN players TEXT");
+  } catch {}
+  try {
+    db.run("ALTER TABLE rooms ADD COLUMN meu_jogador TEXT");
+  } catch {}
 }
 
 export function getDb(): Database { return db; }
@@ -136,20 +145,38 @@ export interface RoomRow {
   is_restrito: number;
   is_moderada: number;
   firecast_uri: string;
+  players?: unknown[];
+  meu_jogador?: unknown;
   updated_at: number;
+}
+
+function formatRoomRow(row: any): RoomRow {
+  if (!row) return row;
+  if (row.players && typeof row.players === "string") {
+    try {
+      row.players = JSON.parse(row.players);
+    } catch {}
+  }
+  if (row.meu_jogador && typeof row.meu_jogador === "string") {
+    try {
+      row.meu_jogador = JSON.parse(row.meu_jogador);
+    } catch {}
+  }
+  return row as RoomRow;
 }
 
 export function upsertRoom(room: Record<string, unknown>): void {
   run(`
     INSERT INTO rooms (id, nome, sistema, msg_status, msg_boas_vindas, site, logotipo,
-                       ha_vagas, is_restrito, is_moderada, firecast_uri, updated_at)
+                       ha_vagas, is_restrito, is_moderada, firecast_uri, players, meu_jogador, updated_at)
     VALUES (:id, :nome, :sistema, :msg_status, :msg_boas_vindas, :site, :logotipo,
-            :ha_vagas, :is_restrito, :is_moderada, :firecast_uri, :updated_at)
+            :ha_vagas, :is_restrito, :is_moderada, :firecast_uri, :players, :meu_jogador, :updated_at)
     ON CONFLICT(id) DO UPDATE SET
       nome=excluded.nome, sistema=excluded.sistema, msg_status=excluded.msg_status,
       msg_boas_vindas=excluded.msg_boas_vindas, site=excluded.site, logotipo=excluded.logotipo,
       ha_vagas=excluded.ha_vagas, is_restrito=excluded.is_restrito,
       is_moderada=excluded.is_moderada, firecast_uri=excluded.firecast_uri,
+      players=excluded.players, meu_jogador=excluded.meu_jogador,
       updated_at=excluded.updated_at
   `, {
     ":id":              room.id as number,
@@ -163,16 +190,19 @@ export function upsertRoom(room: Record<string, unknown>): void {
     ":is_restrito":     room.isRestrito18 ? 1 : 0,
     ":is_moderada":     room.isModerada ? 1 : 0,
     ":firecast_uri":    (room.firecastURI ?? null) as string | null,
+    ":players":         room.players ? JSON.stringify(room.players) : null,
+    ":meu_jogador":     room.meuJogador ? JSON.stringify(room.meuJogador) : null,
     ":updated_at":      Date.now(),
   });
 }
 
 export function getAllRooms(): RoomRow[] {
-  return query<RoomRow>("SELECT * FROM rooms ORDER BY nome");
+  return query<any>("SELECT * FROM rooms ORDER BY nome").map(formatRoomRow);
 }
 
 export function getRoomById(id: number): RoomRow | undefined {
-  return queryOne<RoomRow>("SELECT * FROM rooms WHERE id = ?", [id]);
+  const row = queryOne<any>("SELECT * FROM rooms WHERE id = ?", [id]);
+  return row ? formatRoomRow(row) : undefined;
 }
 
 // --- Room Events ---

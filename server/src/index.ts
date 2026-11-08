@@ -119,6 +119,9 @@ async function main(): Promise<void> {
     // Registra ferramentas do MCP
     registerRoomTools(server);
 
+    process.stdin.on("close", () => process.exit(0));
+    process.stdin.on("end", () => process.exit(0));
+
     const transport = new StdioServerTransport();
     await server.connect(transport);
   }

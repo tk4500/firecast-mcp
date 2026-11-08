@@ -12,6 +12,9 @@ local json     = require("sdk/json.lua");
 local POLL_INTERVAL_MS = 500;
 local CONFIG_FILE = "/mcp/config.json";
 
+-- Guarda referência forte para evitar que o Garbage Collector do Lua destrua o timer
+local _pollTimer = nil;
+
 -- 1. Gerenciamento do config.json no VHD
 local function loadConfig()
     VHD.forceDirectory("/mcp");
@@ -140,8 +143,9 @@ end
 
 -- 4. Registra os comandos do MCP
 local function registerCommands()
-    bridge.registerCommand("list_rooms", rooms.listRooms);
-    bridge.registerCommand("get_room",   rooms.getRoom);
+    bridge.registerCommand("list_rooms",   rooms.listRooms);
+    bridge.registerCommand("get_room",     rooms.getRoom);
+    bridge.registerCommand("list_players", rooms.listPlayers);
 end
 
 -- 5. Registra os listeners de eventos
@@ -162,8 +166,11 @@ local function init()
     registerCommands();
     registerEvents();
 
-    -- Timer de polling da bridge
-    rrpgObjs.newTimer(POLL_INTERVAL_MS, function()
+    -- Timer de polling da bridge (armazenado em _G para imunidade total ao GC)
+    if _G._firecastMcpTimer ~= nil then
+        pcall(function() _G._firecastMcpTimer:setEnabled(false); end);
+    end
+    _G._firecastMcpTimer = rrpgObjs.newTimer(POLL_INTERVAL_MS, function()
         bridge.tick();
     end);
 end

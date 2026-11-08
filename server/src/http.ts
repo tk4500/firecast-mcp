@@ -118,7 +118,7 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         const args = body.arguments ?? {};
 
         if (toolName === "list_rooms") {
-          const result = await handleListRooms();
+          const result = await handleListRooms(args.fresh === true);
           return sendJson(200, { success: true, tool: toolName, result });
         }
 
@@ -126,7 +126,7 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
           if (typeof args.id !== "number") {
             return sendJson(400, { success: false, error: "Missing or invalid 'id' parameter" });
           }
-          const result = await handleGetRoom(args.id);
+          const result = await handleGetRoom(args.id, args.fresh === true);
           return sendJson(200, { success: true, tool: toolName, result });
         }
 

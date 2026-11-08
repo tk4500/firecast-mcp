@@ -95,9 +95,10 @@ function handleEvent(event: OutboxEvent): void {
 
   switch (type) {
     case "command_result": {
-      const cb = resultCallbacks.get(data.id as string);
+      const targetId = (data?.id ?? event.id) as string;
+      const cb = resultCallbacks.get(targetId);
       if (cb) {
-        resultCallbacks.delete(data.id as string);
+        resultCallbacks.delete(targetId);
         cb(event);
       }
       break;
