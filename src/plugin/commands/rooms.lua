@@ -113,47 +113,9 @@ function rooms.listPlayers(args)
     return list;
 end
 
--- Registra listeners de eventos de mesa no bridge.
--- Mantém referências fortes para evitar que o GC desinstale as escutas.
-local _receivers = {};
-
+-- Registra listeners de eventos de mesa no bridge (DESATIVADO).
 function rooms.registerEvents(bridge)
-    require("sdk/firecast.lua");  -- garante que Firecast.listen está disponível
-
-    _receivers.joined = Firecast.listen("MesaJoined", function(params)
-        bridge.emit("room_joined", {
-            room   = serializeRoom(params.room),
-            isMe   = params.me,
-            player = params.player and {
-                id       = params.player.id,
-                login    = params.player.login,
-                nick     = params.player.nick,
-                nome     = params.player.nick or params.player.login,
-                isMestre = params.player.isMestre or false,
-            } or nil,
-        });
-    end);
-
-    _receivers.parted = Firecast.listen("MesaParted", function(params)
-        bridge.emit("room_parted", {
-            room   = serializeRoom(params.room),
-            isMe   = params.me,
-            player = params.player and {
-                id    = params.player.id,
-                login = params.player.login,
-                nick  = params.player.nick,
-                nome  = params.player.nick or params.player.login,
-            } or nil,
-            text   = params.text,
-            isKick = params.isKick,
-            responsible = params.responsible and {
-                id    = params.responsible.id,
-                login = params.responsible.login,
-                nick  = params.responsible.nick,
-                nome  = params.responsible.nick or params.responsible.login,
-            } or nil,
-        });
-    end);
+    -- Desativado: sem escuta contínua de eventos de mesa (MesaJoined / MesaParted).
 end
 
 return rooms;

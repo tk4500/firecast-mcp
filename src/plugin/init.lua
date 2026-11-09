@@ -206,11 +206,12 @@ local function registerCommands()
     bridge.registerCommand("open_sheet_in_tab",   sheetSync.open_sheet_in_tab);
 end
 
--- 5. Registra os listeners de eventos
+-- 5. Registra os listeners de eventos (DESATIVADO: sincronia simultânea e escuta de eventos desabilitadas)
 local function registerEvents()
-    rooms.registerEvents(bridge);
-    chat.registerEvents(bridge);
-    sheetSync.init();
+    -- Desativado a pedido: sem escuta de eventos contínua ou sincronização simultânea.
+    -- rooms.registerEvents(bridge);
+    -- chat.registerEvents(bridge);
+    -- sheetSync.init();
 end
 
 local function logDebug(msg)

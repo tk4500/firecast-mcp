@@ -272,7 +272,7 @@ end
 -- Rastreamento e Observação de Fichas
 --------------------------------------------------------------------------------
 
--- Inscreve uma ficha para observação e sincronização
+-- Inscreve uma ficha (DESATIVADO: sem observer contínuo ou emissão de eventos em tempo real)
 local function trackCharacterSheet(mesa, item, source)
     if not mesa or not item then return; end
     local codigo = tonumber(item.codigoInterno);
@@ -281,7 +281,6 @@ local function trackCharacterSheet(mesa, item, source)
     local isOpenTab = isCharacterOpenInClient(item);
 
     if trackedSheets[codigo] and trackedSheets[codigo].rootNode then
-        -- Já rastreada: atualiza status de aba e origem
         trackedSheets[codigo].isTabOpen = isOpenTab;
         if source then
             trackedSheets[codigo].source = source;
@@ -296,8 +295,6 @@ local function trackCharacterSheet(mesa, item, source)
     item:asyncOpenNDB():thenDo(function(rootNode)
         if rootNode == nil then return; end
 
-        local observer = NDB.newObserver(rootNode);
-
         local tracked = {
             roomId = tonumber(mesa.codigoInterno),
             codigoInterno = codigo,
@@ -305,8 +302,8 @@ local function trackCharacterSheet(mesa, item, source)
             dataType = item.dataType,
             item = item,
             rootNode = rootNode,
-            observer = observer,
-            source = source or "auto",
+            observer = nil,
+            source = source or "manual",
             isTabOpen = isOpenTab,
             lastSync = os.time(),
             pendingChanges = {},
@@ -314,36 +311,9 @@ local function trackCharacterSheet(mesa, item, source)
         };
 
         trackedSheets[codigo] = tracked;
-
-        -- 1. Emite snapshot completo inicial
-        sendSnapshot(tracked);
-
-        -- 2. Escuta alterações profundas com cancelamento de eco
-        observer.onDeepChanged = function(node, attribute, oldValue)
-            if isApplyingMcpSync[codigo] then return; end
-            queueAttributeChange(tracked, node, attribute);
-        end;
-
-        observer.onDeepChildAdded = function(node)
-            if isApplyingMcpSync[codigo] then return; end
-            local path = getNodePath(node, tracked.rootNode);
-            if path ~= "" then
-                tracked.pendingChanges[path] = serializeNDBNode(node, 6, 0);
-                triggerDebounce(tracked);
-            end
-        end;
-
-        observer.onDeepChildRemoved = function(node)
-            if isApplyingMcpSync[codigo] then return; end
-            local path = getNodePath(node, tracked.rootNode);
-            if path ~= "" then
-                tracked.pendingChanges[path] = nil;
-                triggerDebounce(tracked);
-            end
-        end;
-
+        -- Observers contínuos e emissão em tempo real desativados a pedido.
     end):onError(function(err)
-        -- Falha silenciosa ou log de debug
+        -- Falha silenciosa
     end);
 end
 
@@ -562,51 +532,11 @@ function sheetSync.open_sheet_in_tab(args, reply)
 end
 
 --------------------------------------------------------------------------------
--- Inicialização e Varredura Periódica
+-- Inicialização e Varredura Periódica (DESATIVADO)
 --------------------------------------------------------------------------------
-local _scanTimer = nil;
 
 function sheetSync.init()
-    -- Hook em eventos de formulários do Firecast para detecção instantânea de abas abertas
-    local orig_AssignNodeDatabase = _G._eve_Forms_AssignNodeDatabase;
-    _G._eve_Forms_AssignNodeDatabase = function(formHandle, nodeHandle)
-        if orig_AssignNodeDatabase then
-            pcall(orig_AssignNodeDatabase, formHandle, nodeHandle);
-        end
-        pcall(function()
-            local nodeDataBase = NDB.openNodeFacade(nodeHandle);
-            if nodeDataBase then
-                local root = NDB.getRoot(nodeDataBase);
-                if root then
-                    for codigo, tracked in pairs(trackedSheets) do
-                        if tracked.rootNode == root then
-                            tracked.isTabOpen = true;
-                            break;
-                        end
-                    end
-                end
-            end
-        end);
-    end;
-
-    local orig_DestruirForm = _G._eve_Forms_DestruirForm;
-    _G._eve_Forms_DestruirForm = function(formHandle)
-        if orig_DestruirForm then
-            pcall(orig_DestruirForm, formHandle);
-        end
-        pcall(function()
-            -- Reavalia abas após fechamento
-            safeSetTimeout(scanTrackableSheets, 100);
-        end);
-    end;
-
-    -- Executa varredura inicial após 2 segundos
-    safeSetTimeout(scanTrackableSheets, 2000);
-
-    -- Executa varredura contínua a cada 4 segundos
-    _scanTimer = rrpgObjs.newTimer(4000, function()
-        pcall(scanTrackableSheets);
-    end);
+    -- Desativado a pedido: sem hooks em formulários e sem varredura periódica de abas/fichas.
 end
 
 return sheetSync;
