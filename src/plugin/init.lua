@@ -7,6 +7,7 @@ local rooms  = require("plugin/commands/rooms.lua");
 local chat   = require("plugin/commands/chat.lua");
 local ndb    = require("plugin/commands/ndb.lua");
 local pluginsCmd = require("plugin/commands/plugins.lua");
+local firedriveCmd = require("plugin/commands/firedrive.lua");
 local rrpgObjs = require("sdk/rrpgObjs.lua");
 local Firecast = require("sdk/firecast.lua");
 local VHD      = require("sdk/vhd.lua");
@@ -171,6 +172,9 @@ local function registerCommands()
     -- Comandos de Plugins e Modelos de Fichas (DataTypes)
     bridge.registerCommand("list_data_types",     pluginsCmd.list_data_types);
     bridge.registerCommand("list_plugins",        pluginsCmd.list_plugins);
+
+    -- Comandos de Armazenamento / Upload (FireDrive)
+    bridge.registerCommand("quick_upload",        firedriveCmd.quickUpload);
 end
 
 -- 5. Registra os listeners de eventos

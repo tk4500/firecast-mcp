@@ -4,7 +4,7 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
-import { getDbPath, getAllRooms, getRoomById, getAllRoomEvents, getChatMessages } from "./db.js";
+import { getDbPath, getAllRooms, getRoomById, getAllRoomEvents, getChatMessages, listCharacters, findCharacter } from "./db.js";
 import { handleListRooms, handleGetRoom, handleListPlayers } from "./tools/rooms.js";
 import {
   handleListChats,
@@ -28,6 +28,24 @@ import {
   handleListDataTypes,
   handleListInstalledPlugins,
 } from "./tools/plugins.js";
+import {
+  handleCreateCharacter,
+  handleUpdateCharacter,
+  handleGetCharacter,
+  handleListCharacters,
+  handleDeleteCharacter,
+  handleImpersonateCharacter,
+  handleCharacterRoll,
+  handleLinkCharacterSheet,
+  handleImportExternalNpcs,
+} from "./tools/characters.js";
+import {
+  handleUploadMedia,
+  handleGetMediaUrl,
+  handleListMediaFiles,
+  handleSendMediaToChat,
+  handleConfigureStorage,
+} from "./tools/media.js";
 import { sendCommand } from "./bridge.js";
 
 export interface HttpServerOptions {
@@ -663,6 +681,177 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
           return sendJson(200, { success: true, tool: toolName, result });
         }
 
+        // --- Character Manager Tools ---
+
+        if (toolName === "create_character") {
+          if (typeof args.name !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'name' parameter" });
+          }
+          const result = await handleCreateCharacter(args);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "update_character") {
+          const character = args.character || args.id;
+          if (typeof character !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'character' parameter" });
+          }
+          const { character: _ignored, room_id, ...updates } = args;
+          const result = await handleUpdateCharacter(character, updates, room_id);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_character") {
+          const character = args.character || args.id || args.name;
+          if (typeof character !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'character' parameter" });
+          }
+          const result = await handleGetCharacter(character, args.room_id);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_characters") {
+          const result = await handleListCharacters({
+            roomId: args.room_id,
+            includeGlobal: args.include_global !== false,
+            tag: args.tag,
+            search: args.search,
+            limit: args.limit,
+            offset: args.offset,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "delete_character") {
+          const character = args.character || args.id;
+          if (typeof character !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'character' parameter" });
+          }
+          const result = await handleDeleteCharacter(character, args.room_id);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "impersonate_character") {
+          if (typeof args.character !== "string" || typeof args.message !== "string") {
+            return sendJson(400, { success: false, error: "Missing required 'character' or 'message'" });
+          }
+          const result = await handleImpersonateCharacter({
+            character: args.character,
+            message: args.message,
+            roomId: args.room_id,
+            chatId: args.chat_id,
+            type: args.type,
+            imageLabel: args.image_label,
+            imageTag: args.image_tag,
+            avatarOverride: args.avatar_override,
+            rawName: args.raw_name,
+            asWhisperTo: args.as_whisper_to,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "character_roll") {
+          if (typeof args.character !== "string" || typeof args.expression !== "string") {
+            return sendJson(400, { success: false, error: "Missing required 'character' or 'expression'" });
+          }
+          const result = await handleCharacterRoll({
+            character: args.character,
+            expression: args.expression,
+            roomId: args.room_id,
+            message: args.message,
+            chatId: args.chat_id,
+            imageLabel: args.image_label,
+            imageTag: args.image_tag,
+            avatarOverride: args.avatar_override,
+            rawName: args.raw_name,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "link_character_sheet") {
+          if (typeof args.character !== "string" || typeof args.room_id !== "number") {
+            return sendJson(400, { success: false, error: "Missing required 'character' or 'room_id'" });
+          }
+          const result = await handleLinkCharacterSheet({
+            character: args.character,
+            roomId: args.room_id,
+            sheetCodigo: args.sheet_codigo,
+            sheetDataType: args.sheet_data_type,
+            autoCreate: args.auto_create === true,
+            parentFolderCodigo: args.parent_folder_codigo,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "import_external_npcs") {
+          const result = await handleImportExternalNpcs({
+            source: args.source,
+            roomId: args.room_id,
+            overwrite: args.overwrite === true,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "upload_media") {
+          const result = await handleUploadMedia({
+            filePath: args.file_path,
+            contentBase64: args.content_base64,
+            filename: args.filename,
+            provider: args.provider,
+            subfolder: args.subfolder,
+            timeoutSeconds: args.timeout_seconds,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "get_media_url") {
+          const pathOrFilename = args.path_or_filename || args.path || args.filename;
+          if (typeof pathOrFilename !== "string") {
+            return sendJson(400, { success: false, error: "Missing 'path_or_filename' parameter" });
+          }
+          const result = await handleGetMediaUrl({
+            pathOrFilename,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "list_media_files") {
+          const result = await handleListMediaFiles({
+            subfolder: args.subfolder,
+            limit: args.limit,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "send_media_to_chat") {
+          const roomId = typeof args.room_id === "number" ? args.room_id : args.id;
+          if (typeof roomId !== "number") {
+            return sendJson(400, { success: false, error: "Missing required 'room_id'" });
+          }
+          const result = await handleSendMediaToChat({
+            roomId,
+            chatId: args.chat_id,
+            filePath: args.file_path,
+            contentBase64: args.content_base64,
+            filename: args.filename,
+            mediaUrl: args.media_url,
+            caption: args.caption,
+            asCharacterId: args.as_character_id,
+            npcName: args.npc_name,
+            provider: args.provider,
+            subfolder: args.subfolder,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        if (toolName === "configure_storage") {
+          const result = await handleConfigureStorage({
+            provider: args.provider,
+            gdriveAssetsPath: args.gdrive_assets_path,
+          });
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
         return sendJson(404, { success: false, error: `Unknown tool "${toolName}"` });
       }
 
@@ -704,6 +893,103 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50;
         const messages = getChatMessages(roomId, chatId, limit);
         return sendJson(200, { count: messages.length, roomId, chatId: chatId ?? "all", messages });
+      }
+
+      // 8. Inspeção de personagens no banco: GET /db/characters
+      if (req.method === "GET" && pathname === "/db/characters") {
+        const roomIdStr = url.searchParams.get("roomId");
+        const roomId = roomIdStr ? parseInt(roomIdStr, 10) : undefined;
+        const includeGlobal = url.searchParams.get("includeGlobal") !== "false";
+        const tag = url.searchParams.get("tag") ?? undefined;
+        const search = url.searchParams.get("search") ?? undefined;
+        const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 100;
+        const offset = url.searchParams.get("offset") ? parseInt(url.searchParams.get("offset")!, 10) : 0;
+
+        const result = listCharacters({
+          roomId,
+          includeGlobal,
+          tag,
+          search,
+          limit,
+          offset,
+        });
+        return sendJson(200, result);
+      }
+
+      // 8.1. Configuração e status do armazenamento de mídia: GET /media/config, POST /media/config
+      if (pathname === "/media/config") {
+        if (req.method === "GET") {
+          const result = await handleConfigureStorage();
+          return sendJson(200, result);
+        }
+        if (req.method === "POST") {
+          const body = await readBody();
+          const result = await handleConfigureStorage({
+            provider: body.provider,
+            gdriveAssetsPath: body.gdrive_assets_path,
+          });
+          return sendJson(200, result);
+        }
+      }
+
+      // 8.2. Upload de mídia: POST /media/upload
+      if (req.method === "POST" && pathname === "/media/upload") {
+        const body = await readBody();
+        const result = await handleUploadMedia({
+          filePath: body.file_path,
+          contentBase64: body.content_base64,
+          filename: body.filename,
+          provider: body.provider,
+          subfolder: body.subfolder,
+          timeoutSeconds: body.timeout_seconds,
+        });
+        return sendJson(200, result);
+      }
+
+      // 8.3. Resolução de URL de mídia: GET /media/url, POST /media/url
+      if (pathname === "/media/url") {
+        let pathOrFilename = url.searchParams.get("path") || url.searchParams.get("filename");
+        if (!pathOrFilename && req.method === "POST") {
+          const body = await readBody();
+          pathOrFilename = body.path_or_filename || body.path || body.filename;
+        }
+        if (!pathOrFilename) {
+          return sendJson(400, { success: false, error: "Missing 'path' or 'filename' parameter" });
+        }
+        const result = await handleGetMediaUrl({ pathOrFilename });
+        return sendJson(200, result);
+      }
+
+      // 8.4. Listagem de arquivos de mídia: GET /media/list
+      if (req.method === "GET" && pathname === "/media/list") {
+        const subfolder = url.searchParams.get("subfolder") || undefined;
+        const limitStr = url.searchParams.get("limit");
+        const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+        const result = await handleListMediaFiles({ subfolder, limit });
+        return sendJson(200, result);
+      }
+
+      // 8.5. Envio de mídia para o chat: POST /media/send
+      if (req.method === "POST" && pathname === "/media/send") {
+        const body = await readBody();
+        const roomId = typeof body.room_id === "number" ? body.room_id : body.id;
+        if (typeof roomId !== "number") {
+          return sendJson(400, { success: false, error: "Missing required 'room_id'" });
+        }
+        const result = await handleSendMediaToChat({
+          roomId,
+          chatId: body.chat_id,
+          filePath: body.file_path,
+          contentBase64: body.content_base64,
+          filename: body.filename,
+          mediaUrl: body.media_url,
+          caption: body.caption,
+          asCharacterId: body.as_character_id,
+          npcName: body.npc_name,
+          provider: body.provider,
+          subfolder: body.subfolder,
+        });
+        return sendJson(200, result);
       }
 
       // 8. Inspeção de arquivos em inbox: GET /inbox

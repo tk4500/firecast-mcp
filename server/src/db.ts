@@ -147,6 +147,41 @@ function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_room ON chat_messages(room_id);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(room_id, chat_id);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_ts   ON chat_messages(ts);
+
+    CREATE TABLE IF NOT EXISTS characters (
+      id               TEXT PRIMARY KEY,
+      room_id          INTEGER,
+      code             TEXT,
+      name             TEXT NOT NULL,
+      title            TEXT,
+      avatar_url       TEXT,
+      images           TEXT,
+      gender           TEXT DEFAULT 'undefined',
+      color            TEXT,
+      bkg_color        TEXT,
+      bold             INTEGER DEFAULT 0,
+      italic           INTEGER DEFAULT 0,
+      underline        INTEGER DEFAULT 0,
+      strikeout        INTEGER DEFAULT 0,
+      talemark_options TEXT,
+      voice            TEXT,
+      personality      TEXT,
+      speech_style     TEXT,
+      appearance       TEXT,
+      background       TEXT,
+      notes            TEXT,
+      tags             TEXT,
+      sheet_codigo     INTEGER,
+      sheet_data_type  TEXT,
+      bars             TEXT,
+      stats            TEXT,
+      created_at       INTEGER NOT NULL,
+      updated_at       INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_characters_room ON characters(room_id);
+    CREATE INDEX IF NOT EXISTS idx_characters_code ON characters(code);
+    CREATE INDEX IF NOT EXISTS idx_characters_name ON characters(name);
   `);
 
   try {
@@ -440,3 +475,321 @@ export function getChatMessages(roomId: number, chatId?: string, limit = 50): Ch
   }
   return rows.map(formatChatMessageRow);
 }
+
+// --- Characters (Character Manager) ---
+
+export interface CharacterImage {
+  url: string;
+  label?: string; // e.g. "Padrão", "Combate", "Furioso", "Casual", "Token"
+  tag?: string;   // e.g. "portrait", "battle", "token", "nsfw"
+}
+
+export interface CharacterTalemarkStyle {
+  color?: string;
+  bkgColor?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikeout?: boolean;
+  parseCharActions?: boolean;
+  parseCharEmDashSpeech?: boolean;
+  parseCharQuotedSpeech?: boolean;
+  parseSmileys?: boolean;
+  parseURL?: boolean;
+}
+
+export interface CharacterRow {
+  id: string;
+  room_id: number | null;
+  code: string | null;
+  name: string;
+  title: string | null;
+  avatar_url: string | null;
+  images: CharacterImage[];
+  gender: "masculine" | "feminine" | "neuter" | "undefined";
+  color: string | null;
+  bkg_color: string | null;
+  bold: number;
+  italic: number;
+  underline: number;
+  strikeout: number;
+  talemark_options: any;
+  voice: string | null;
+  personality: string | null;
+  speech_style: string | null;
+  appearance: string | null;
+  background: string | null;
+  notes: string | null;
+  tags: string[];
+  sheet_codigo: number | null;
+  sheet_data_type: string | null;
+  bars: Record<string, { val: number; max: number; label?: string; color?: string }>;
+  stats: Record<string, any>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CharacterInput {
+  id?: string;
+  room_id?: number | null;
+  code?: string | null;
+  name: string;
+  title?: string | null;
+  avatar_url?: string | null;
+  images?: (CharacterImage | string)[];
+  gender?: "masculine" | "feminine" | "neuter" | "undefined";
+  color?: string | null;
+  bkg_color?: string | null;
+  bold?: boolean | number;
+  italic?: boolean | number;
+  underline?: boolean | number;
+  strikeout?: boolean | number;
+  talemark_options?: any;
+  voice?: string | null;
+  personality?: string | null;
+  speech_style?: string | null;
+  appearance?: string | null;
+  background?: string | null;
+  notes?: string | null;
+  tags?: string[];
+  sheet_codigo?: number | null;
+  sheet_data_type?: string | null;
+  bars?: Record<string, { val: number; max: number; label?: string; color?: string }>;
+  stats?: Record<string, any>;
+}
+
+export function formatCharacterRow(row: any): CharacterRow {
+  if (!row) return row;
+  const parsed = { ...row };
+  if (typeof parsed.images === "string") {
+    try { parsed.images = JSON.parse(parsed.images); } catch { parsed.images = []; }
+  } else if (!Array.isArray(parsed.images)) {
+    parsed.images = [];
+  }
+  if (typeof parsed.talemark_options === "string") {
+    try { parsed.talemark_options = JSON.parse(parsed.talemark_options); } catch { parsed.talemark_options = null; }
+  }
+  if (typeof parsed.tags === "string") {
+    try { parsed.tags = JSON.parse(parsed.tags); } catch { parsed.tags = []; }
+  } else if (!Array.isArray(parsed.tags)) {
+    parsed.tags = [];
+  }
+  if (typeof parsed.bars === "string") {
+    try { parsed.bars = JSON.parse(parsed.bars); } catch { parsed.bars = {}; }
+  } else if (!parsed.bars || typeof parsed.bars !== "object") {
+    parsed.bars = {};
+  }
+  if (typeof parsed.stats === "string") {
+    try { parsed.stats = JSON.parse(parsed.stats); } catch { parsed.stats = {}; }
+  } else if (!parsed.stats || typeof parsed.stats !== "object") {
+    parsed.stats = {};
+  }
+  return parsed as CharacterRow;
+}
+
+function generateSlug(name: string, code?: string | null): string {
+  if (code && code.trim()) {
+    return code.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  }
+  const clean = name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return clean || `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+}
+
+export function getCharacterById(id: string): CharacterRow | undefined {
+  const row = queryOne<any>("SELECT * FROM characters WHERE id = ?", [id]);
+  return row ? formatCharacterRow(row) : undefined;
+}
+
+export function findCharacter(queryStr: string, roomId?: number | null): CharacterRow | undefined {
+  const clean = queryStr.trim();
+  if (!clean) return undefined;
+
+  // 1. Exact ID
+  let row = queryOne<any>("SELECT * FROM characters WHERE id = ?", [clean]);
+  if (row) return formatCharacterRow(row);
+
+  // 2. Exact code
+  if (roomId) {
+    row = queryOne<any>("SELECT * FROM characters WHERE code = ? AND room_id = ?", [clean, roomId]);
+    if (row) return formatCharacterRow(row);
+  }
+  row = queryOne<any>("SELECT * FROM characters WHERE code = ?", [clean]);
+  if (row) return formatCharacterRow(row);
+
+  // 3. Exact name
+  if (roomId) {
+    row = queryOne<any>("SELECT * FROM characters WHERE name = ? COLLATE NOCASE AND room_id = ?", [clean, roomId]);
+    if (row) return formatCharacterRow(row);
+  }
+  row = queryOne<any>("SELECT * FROM characters WHERE name = ? COLLATE NOCASE", [clean]);
+  if (row) return formatCharacterRow(row);
+
+  // 4. Fuzzy name LIKE
+  if (roomId) {
+    row = queryOne<any>("SELECT * FROM characters WHERE name LIKE ? AND room_id = ? LIMIT 1", [`%${clean}%`, roomId]);
+    if (row) return formatCharacterRow(row);
+  }
+  row = queryOne<any>("SELECT * FROM characters WHERE name LIKE ? LIMIT 1", [`%${clean}%`]);
+  if (row) return formatCharacterRow(row);
+
+  return undefined;
+}
+
+export function upsertCharacter(input: CharacterInput): CharacterRow {
+  const now = Math.floor(Date.now() / 1000);
+  const id = input.id?.trim() || generateSlug(input.name, input.code);
+  const existing = getCharacterById(id);
+
+  const imagesFormatted: CharacterImage[] = (input.images || []).map((img) =>
+    typeof img === "string" ? { url: img } : img
+  );
+
+  const imagesStr = JSON.stringify(imagesFormatted);
+  const tagsStr = JSON.stringify(input.tags || []);
+  const barsStr = JSON.stringify(input.bars || {});
+  const statsStr = JSON.stringify(input.stats || {});
+  const talemarkStr = input.talemark_options ? JSON.stringify(input.talemark_options) : null;
+
+  const bold = input.bold === true || input.bold === 1 ? 1 : 0;
+  const italic = input.italic === true || input.italic === 1 ? 1 : 0;
+  const underline = input.underline === true || input.underline === 1 ? 1 : 0;
+  const strikeout = input.strikeout === true || input.strikeout === 1 ? 1 : 0;
+
+  const createdAt = existing ? existing.created_at : now;
+
+  run(
+    `INSERT INTO characters (
+      id, room_id, code, name, title, avatar_url, images, gender,
+      color, bkg_color, bold, italic, underline, strikeout, talemark_options, voice,
+      personality, speech_style, appearance, background, notes, tags,
+      sheet_codigo, sheet_data_type, bars, stats, created_at, updated_at
+    ) VALUES (
+      :id, :room_id, :code, :name, :title, :avatar_url, :images, :gender,
+      :color, :bkg_color, :bold, :italic, :underline, :strikeout, :talemark_options, :voice,
+      :personality, :speech_style, :appearance, :background, :notes, :tags,
+      :sheet_codigo, :sheet_data_type, :bars, :stats, :created_at, :updated_at
+    ) ON CONFLICT(id) DO UPDATE SET
+      room_id=excluded.room_id,
+      code=excluded.code,
+      name=excluded.name,
+      title=excluded.title,
+      avatar_url=excluded.avatar_url,
+      images=excluded.images,
+      gender=excluded.gender,
+      color=excluded.color,
+      bkg_color=excluded.bkg_color,
+      bold=excluded.bold,
+      italic=excluded.italic,
+      underline=excluded.underline,
+      strikeout=excluded.strikeout,
+      talemark_options=excluded.talemark_options,
+      voice=excluded.voice,
+      personality=excluded.personality,
+      speech_style=excluded.speech_style,
+      appearance=excluded.appearance,
+      background=excluded.background,
+      notes=excluded.notes,
+      tags=excluded.tags,
+      sheet_codigo=excluded.sheet_codigo,
+      sheet_data_type=excluded.sheet_data_type,
+      bars=excluded.bars,
+      stats=excluded.stats,
+      updated_at=excluded.updated_at
+    `,
+    {
+      ":id": id,
+      ":room_id": input.room_id ?? null,
+      ":code": input.code?.trim() || null,
+      ":name": input.name.trim(),
+      ":title": input.title?.trim() || null,
+      ":avatar_url": input.avatar_url?.trim() || null,
+      ":images": imagesStr,
+      ":gender": input.gender ?? "undefined",
+      ":color": input.color?.trim() || null,
+      ":bkg_color": input.bkg_color?.trim() || null,
+      ":bold": bold,
+      ":italic": italic,
+      ":underline": underline,
+      ":strikeout": strikeout,
+      ":talemark_options": talemarkStr,
+      ":voice": input.voice?.trim() || null,
+      ":personality": input.personality?.trim() || null,
+      ":speech_style": input.speech_style?.trim() || null,
+      ":appearance": input.appearance?.trim() || null,
+      ":background": input.background?.trim() || null,
+      ":notes": input.notes?.trim() || null,
+      ":tags": tagsStr,
+      ":sheet_codigo": input.sheet_codigo ?? null,
+      ":sheet_data_type": input.sheet_data_type?.trim() || null,
+      ":bars": barsStr,
+      ":stats": statsStr,
+      ":created_at": createdAt,
+      ":updated_at": now,
+    }
+  );
+
+  return getCharacterById(id)!;
+}
+
+export function listCharacters(options?: {
+  roomId?: number | null;
+  includeGlobal?: boolean;
+  tag?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): { characters: CharacterRow[]; total: number } {
+  const limit = options?.limit ?? 50;
+  const offset = options?.offset ?? 0;
+  const conditions: string[] = [];
+  const params: (string | number | null)[] = [];
+
+  if (options?.roomId !== undefined && options?.roomId !== null) {
+    if (options.includeGlobal) {
+      conditions.push("(room_id = ? OR room_id IS NULL)");
+      params.push(options.roomId);
+    } else {
+      conditions.push("room_id = ?");
+      params.push(options.roomId);
+    }
+  }
+
+  if (options?.tag) {
+    conditions.push("tags LIKE ?");
+    params.push(`%"${options.tag}"%`);
+  }
+
+  if (options?.search) {
+    conditions.push("(name LIKE ? OR code LIKE ? OR title LIKE ? OR tags LIKE ?)");
+    const s = `%${options.search}%`;
+    params.push(s, s, s, s);
+  }
+
+  const whereClause = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+
+  const countRow = queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM characters ${whereClause}`, params);
+  const total = countRow?.count ?? 0;
+
+  const rows = query<any>(
+    `SELECT * FROM characters ${whereClause} ORDER BY updated_at DESC, name ASC LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  return {
+    characters: rows.map(formatCharacterRow),
+    total,
+  };
+}
+
+export function deleteCharacter(idOrCode: string, roomId?: number | null): boolean {
+  const char = findCharacter(idOrCode, roomId);
+  if (!char) return false;
+  run("DELETE FROM characters WHERE id = :id", { ":id": char.id });
+  return true;
+}
+

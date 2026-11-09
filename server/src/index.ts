@@ -16,14 +16,10 @@ import { registerRoomTools } from "./tools/rooms.js";
 import { registerChatTools } from "./tools/chat.js";
 import { registerNdbTools } from "./tools/ndb.js";
 import { registerPluginsTools } from "./tools/plugins.js";
+import { registerCharacterTools } from "./tools/characters.js";
+import { registerMediaTools } from "./tools/media.js";
 import { startHttpServer } from "./http.js";
-
-interface Config {
-  db_path?: string | null;
-  poll_interval_ms?: number;
-  http_port?: number;
-  version?: string;
-}
+import { readConfig, setActiveBridgeDir, type AppConfig } from "./config.js";
 
 // 1. Parsing de argumentos CLI
 const args = process.argv.slice(2);
@@ -65,38 +61,9 @@ function resolveBridgePath(): string {
   return process.cwd();
 }
 
-// 3. Leitura do config.json escrito pelo plugin Lua (cria padrão se inexistente)
-function readConfig(bridgeDir: string): Config {
-  const configPath = path.join(bridgeDir, "config.json");
-  if (!fs.existsSync(configPath)) {
-    const defaultConfig: Config = {
-      poll_interval_ms: 500,
-      http_port: 3000,
-      version: "1.0.0",
-    };
-    try {
-      if (!fs.existsSync(bridgeDir)) {
-        fs.mkdirSync(bridgeDir, { recursive: true });
-      }
-      fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), "utf-8");
-      return defaultConfig;
-    } catch (err) {
-      process.stderr.write(`[Firecast MCP] Aviso: erro ao criar config.json inicial: ${err}\n`);
-      return {};
-    }
-  }
-
-  try {
-    const content = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(content) as Config;
-  } catch (err) {
-    process.stderr.write(`[Firecast MCP] Aviso: erro ao ler config.json: ${err}\n`);
-    return {};
-  }
-}
-
 async function main(): Promise<void> {
   const bridgePath = resolveBridgePath();
+  setActiveBridgeDir(bridgePath);
   const config = readConfig(bridgePath);
 
   // Se db_path foi definido no config.json (ex: via /mcp db no Firecast), aplica ao DB
@@ -129,6 +96,8 @@ async function main(): Promise<void> {
     registerChatTools(server);
     registerNdbTools(server);
     registerPluginsTools(server);
+    registerCharacterTools(server);
+    registerMediaTools(server);
 
     process.stdin.on("close", () => process.exit(0));
     process.stdin.on("end", () => process.exit(0));
