@@ -46,6 +46,8 @@ import {
   handleSendMediaToChat,
   handleConfigureStorage,
 } from "./tools/media.js";
+import { sheetSyncTools } from "./tools/sheet_sync.js";
+import { getSheetFromDb, listSheetsFromDb } from "./db.js";
 import { sendCommand } from "./bridge.js";
 
 export interface HttpServerOptions {
@@ -425,6 +427,68 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
                   initial_data: { type: "object" },
                 },
                 required: ["room_id", "name", "data_type"],
+              },
+            },
+            {
+              name: "get_character_sheet",
+              description: "Obtém dados em tempo real da ficha de personagem (NDB). Lê instantaneamente do SQLite (via NodeObserver) ou direto do Firecast com fresh=true.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  fresh: { type: "boolean" },
+                },
+                required: ["room_id", "codigo_interno"],
+              },
+            },
+            {
+              name: "update_character_sheet",
+              description: "Modifica campos ou sub-árvores na ficha de personagem (NDB) com cancelamento de eco e sincronização bidirecional.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  changes: { type: "object", description: "Dicionário de alterações (suporta ponto: 'atributos.forca')" },
+                },
+                required: ["room_id", "codigo_interno", "changes"],
+              },
+            },
+            {
+              name: "list_synced_sheets",
+              description: "Lista todas as fichas sincronizadas e observadas na mesa, indicando se pertencem a jogadores online ou abas abertas.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  fresh: { type: "boolean" },
+                },
+              },
+            },
+            {
+              name: "sync_character_sheet",
+              description: "Inicia a sincronização contínua de uma ficha de personagem específica com observador em tempo real.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                  source: { type: "string" },
+                },
+                required: ["room_id", "codigo_interno"],
+              },
+            },
+            {
+              name: "open_character_sheet",
+              description: "Abre a ficha de personagem em uma aba visual na interface do Firecast e marca para sincronização ativa.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  room_id: { type: "integer" },
+                  codigo_interno: { type: "integer" },
+                },
+                required: ["room_id", "codigo_interno"],
               },
             },
           ],
@@ -852,6 +916,12 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
           return sendJson(200, { success: true, tool: toolName, result });
         }
 
+        const syncTool = sheetSyncTools.find((t) => t.name === toolName);
+        if (syncTool) {
+          const result = await syncTool.handler(args);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
         return sendJson(404, { success: false, error: `Unknown tool "${toolName}"` });
       }
 
@@ -990,6 +1060,21 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
           subfolder: body.subfolder,
         });
         return sendJson(200, result);
+      }
+
+      // 8.6. Inspeção de fichas de personagens sincronizadas no SQLite: GET /db/sheets
+      if (req.method === "GET" && pathname === "/db/sheets") {
+        const roomIdStr = url.searchParams.get("roomId");
+        const roomId = roomIdStr ? parseInt(roomIdStr, 10) : undefined;
+        const codigoInternoStr = url.searchParams.get("codigoInterno");
+
+        if (codigoInternoStr && roomId) {
+          const sheet = getSheetFromDb(roomId, parseInt(codigoInternoStr, 10));
+          return sendJson(200, { sheet });
+        }
+
+        const sheets = listSheetsFromDb(roomId);
+        return sendJson(200, { count: sheets.length, sheets });
       }
 
       // 8. Inspeção de arquivos em inbox: GET /inbox

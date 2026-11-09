@@ -8,6 +8,7 @@ local chat   = require("plugin/commands/chat.lua");
 local ndb    = require("plugin/commands/ndb.lua");
 local pluginsCmd = require("plugin/commands/plugins.lua");
 local firedriveCmd = require("plugin/commands/firedrive.lua");
+local sheetSync = require("plugin/commands/sheet_sync.lua");
 local rrpgObjs = require("sdk/rrpgObjs.lua");
 local Firecast = require("sdk/firecast.lua");
 local VHD      = require("sdk/vhd.lua");
@@ -197,12 +198,19 @@ local function registerCommands()
 
     -- Comandos de Armazenamento / Upload (FireDrive)
     bridge.registerCommand("quick_upload",        firedriveCmd.quickUpload);
+
+    -- Comandos de Sincronização Bidirecional de Fichas (NDB & Abas)
+    bridge.registerCommand("list_synced_sheets",  sheetSync.list_synced_sheets);
+    bridge.registerCommand("sync_sheet",          sheetSync.sync_sheet);
+    bridge.registerCommand("update_sheet",        sheetSync.update_sheet);
+    bridge.registerCommand("open_sheet_in_tab",   sheetSync.open_sheet_in_tab);
 end
 
 -- 5. Registra os listeners de eventos
 local function registerEvents()
     rooms.registerEvents(bridge);
     chat.registerEvents(bridge);
+    sheetSync.init();
 end
 
 local function logDebug(msg)

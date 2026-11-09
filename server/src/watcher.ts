@@ -3,7 +3,14 @@
 
 import fs from "fs";
 import path from "path";
-import { getDb, upsertRoom, insertRoomEvent, insertChatMessage } from "./db.js";
+import {
+  getDb,
+  upsertRoom,
+  insertRoomEvent,
+  insertChatMessage,
+  upsertSheetSnapshot,
+  applySheetDeltas,
+} from "./db.js";
 
 type OutboxEvent = {
   id: string;
@@ -143,6 +150,35 @@ function handleEvent(event: OutboxEvent): void {
         roll:          data.roll as any,
         raw_json:      data.log_rec,
         ts:            event.ts,
+      });
+      break;
+    }
+
+    case "sheet_snapshot": {
+      upsertSheetSnapshot({
+        roomId:         (data.roomId as number) ?? 0,
+        codigoInterno:  (data.codigoInterno as number) ?? 0,
+        characterName:  (data.characterName as string) ?? "",
+        dataType:       (data.dataType as string) ?? "",
+        syncSource:     (data.source as string) ?? "auto",
+        isOpenInTab:    !!data.isTabOpen,
+        data:           data.data ?? {},
+        rawXml:         data.rawXml as string | undefined,
+        timestamp:      (data.timestamp as number) ?? event.ts,
+      });
+      break;
+    }
+
+    case "sheet_change": {
+      applySheetDeltas({
+        roomId:         (data.roomId as number) ?? 0,
+        codigoInterno:  (data.codigoInterno as number) ?? 0,
+        characterName:  (data.characterName as string) ?? "",
+        dataType:       (data.dataType as string) ?? "",
+        syncSource:     (data.source as string) ?? "auto",
+        isOpenInTab:    !!data.isTabOpen,
+        changes:        (data.changes as Record<string, any>) ?? {},
+        timestamp:      (data.timestamp as number) ?? event.ts,
       });
       break;
     }

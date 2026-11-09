@@ -18,6 +18,7 @@ import { registerNdbTools } from "./tools/ndb.js";
 import { registerPluginsTools } from "./tools/plugins.js";
 import { registerCharacterTools } from "./tools/characters.js";
 import { registerMediaTools } from "./tools/media.js";
+import { registerSheetSyncTools } from "./tools/sheet_sync.js";
 import { startHttpServer } from "./http.js";
 import { readConfig, setActiveBridgeDir, type AppConfig } from "./config.js";
 
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
     registerPluginsTools(server);
     registerCharacterTools(server);
     registerMediaTools(server);
+    registerSheetSyncTools(server);
 
     process.stdin.on("close", () => process.exit(0));
     process.stdin.on("end", () => process.exit(0));

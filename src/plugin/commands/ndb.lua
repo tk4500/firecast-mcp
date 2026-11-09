@@ -446,14 +446,14 @@ function ndbCommands.edit_sheet_ndb(args, reply)
         return reply(false, "roomId and codigoInterno are required");
     end
 
-    -- Trava de segurança estrita: edição apenas na mesa de testes 'tttttaaaaa' (239256)
-    if roomId ~= 239256 then
-        return reply(false, "Safety guard: sheet modifications are currently restricted to the test room 'tttttaaaaa' (id 239256)");
-    end
-
     local mesa = findMesa(roomId);
     if not mesa then
         return reply(false, "Room " .. tostring(roomId) .. " not found");
+    end
+
+    local isMaster = mesa.meuJogador and mesa.meuJogador.isMestre;
+    if roomId ~= 239256 and not isMaster then
+        return reply(false, "Safety guard: sheet modifications require GM permissions in room " .. tostring(roomId));
     end
 
     local item = mesa:findBibliotecaItem(codigoInterno);
@@ -471,16 +471,30 @@ function ndbCommands.edit_sheet_ndb(args, reply)
             return reply(false, "Could not open character NDB");
         end
 
-        local ok, result = pcall(applyNodeOperations, rootNode, args.operations);
-        if not ok then
-            return reply(false, "Error applying operations to NDB: " .. tostring(result));
+        -- Se xml foi fornecido, importa diretamente via NDB.importXML
+        if args.xml and type(args.xml) == "string" and args.xml ~= "" then
+            local okXml, errXml = pcall(function()
+                NDB.importXML(rootNode, args.xml);
+            end);
+            if not okXml then
+                return reply(false, "Error importing XML to NDB: " .. tostring(errXml));
+            end
+        end
+
+        local appliedCount = 0;
+        if args.operations and #args.operations > 0 then
+            local ok, result = pcall(applyNodeOperations, rootNode, args.operations);
+            if not ok then
+                return reply(false, "Error applying operations to NDB: " .. tostring(result));
+            end
+            appliedCount = result;
         end
 
         return reply(true, {
             success = true,
             roomId = roomId,
             codigoInterno = codigoInterno,
-            appliedOperations = result,
+            appliedOperations = appliedCount,
             updatedData = serializeNDBNode(rootNode, 4, 0),
         });
     end):onError(function(err)
@@ -562,13 +576,14 @@ function ndbCommands.edit_dock_ndb(args, reply)
         return reply(false, "roomId and name are required");
     end
 
-    if roomId ~= 239256 then
-        return reply(false, "Safety guard: dock modifications are currently restricted to the test room 'tttttaaaaa' (id 239256)");
-    end
-
     local mesa = findMesa(roomId);
     if not mesa then
         return reply(false, "Room " .. tostring(roomId) .. " not found");
+    end
+
+    local isMaster = mesa.meuJogador and mesa.meuJogador.isMestre;
+    if roomId ~= 239256 and not isMaster then
+        return reply(false, "Safety guard: dock modifications require GM permissions in room " .. tostring(roomId));
     end
 
     local isUser = (args.isUser == true or args.isUser == "true");
@@ -607,17 +622,19 @@ function ndbCommands.manage_library_item(args, reply)
         return reply(false, "roomId and action are required");
     end
 
-    if roomId ~= 239256 then
-        return reply(false, "Safety guard: library modifications are currently restricted to the test room 'tttttaaaaa' (id 239256)");
-    end
-
     local mesa = findMesa(roomId);
     if not mesa then
         return reply(false, "Room " .. tostring(roomId) .. " not found");
     end
 
+    local isMaster = mesa.meuJogador and mesa.meuJogador.isMestre;
+    if roomId ~= 239256 and not isMaster then
+        return reply(false, "Safety guard: library modifications require GM permissions in room " .. tostring(roomId));
+    end
+
+    local parentCodigo = tonumber(args.parentCodigoInterno or args.parentCodigo or args.parent_codigo);
+
     if action == "create_dir" then
-        local parentCodigo = tonumber(args.parentCodigoInterno);
         local parentItem = parentCodigo and mesa:findBibliotecaItem(parentCodigo) or mesa.biblioteca;
         if not parentItem then
             return reply(false, "Parent library item not found");
@@ -638,7 +655,6 @@ function ndbCommands.manage_library_item(args, reply)
         end);
 
     elseif action == "create_char" then
-        local parentCodigo = tonumber(args.parentCodigoInterno);
         local parentItem = parentCodigo and mesa:findBibliotecaItem(parentCodigo) or mesa.biblioteca;
         if not parentItem then
             return reply(false, "Parent library item not found");
@@ -747,13 +763,14 @@ function ndbCommands.manage_room(args, reply)
         return reply(false, "roomId is required");
     end
 
-    if roomId ~= 239256 then
-        return reply(false, "Safety guard: room modifications are currently restricted to the test room 'tttttaaaaa' (id 239256)");
-    end
-
     local mesa = findMesa(roomId);
     if not mesa then
         return reply(false, "Room " .. tostring(roomId) .. " not found");
+    end
+
+    local isMaster = mesa.meuJogador and mesa.meuJogador.isMestre;
+    if roomId ~= 239256 and not isMaster then
+        return reply(false, "Safety guard: room modifications require GM permissions in room " .. tostring(roomId));
     end
 
     local action = args.action or "get_details";

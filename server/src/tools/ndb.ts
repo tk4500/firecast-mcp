@@ -73,19 +73,16 @@ export async function handleGetSheetNDB(params: {
 export async function handleEditSheetNDB(params: {
   roomId: number;
   codigoInterno: number;
-  operations: NodeOperation[];
+  operations?: NodeOperation[];
+  xml?: string;
 }): Promise<unknown> {
-  if (params.roomId !== TEST_ROOM_ID) {
-    throw new Error(
-      `Safety guard: modifications to character sheets are restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
-    );
-  }
   return await sendCommand(
     "edit_sheet_ndb",
     {
       roomId: params.roomId,
       codigoInterno: params.codigoInterno,
       operations: params.operations,
+      xml: params.xml,
     },
     30_000
   );
@@ -121,11 +118,6 @@ export async function handleEditDockNDB(params: {
   operations: NodeOperation[];
   isUser?: boolean;
 }): Promise<unknown> {
-  if (params.roomId !== TEST_ROOM_ID) {
-    throw new Error(
-      `Safety guard: modifications to dock NDB are restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
-    );
-  }
   return await sendCommand(
     "edit_dock_ndb",
     {
@@ -147,11 +139,6 @@ export async function handleManageLibraryItem(params: {
   dataType?: string;
   changes?: Record<string, unknown>;
 }): Promise<unknown> {
-  if (params.roomId !== TEST_ROOM_ID) {
-    throw new Error(
-      `Safety guard: library management is restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
-    );
-  }
   return await sendCommand(
     "manage_library_item",
     {
@@ -172,11 +159,6 @@ export async function handleManageRoom(params: {
   action: "get_details" | "set_moderada";
   moderada?: boolean;
 }): Promise<unknown> {
-  if (params.roomId !== TEST_ROOM_ID) {
-    throw new Error(
-      `Safety guard: room management is restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
-    );
-  }
   return await sendCommand(
     "manage_room",
     {
@@ -203,13 +185,8 @@ export async function handleCreateCharacterSheet(params: {
   parentCodigo?: number;
   autoStructure?: boolean;
   initialData?: Record<string, unknown>;
+  xml?: string;
 }): Promise<unknown> {
-  if (params.roomId !== TEST_ROOM_ID) {
-    throw new Error(
-      `Safety guard: character sheet creation is restricted to test room 'tttttaaaaa' (id ${TEST_ROOM_ID}).`
-    );
-  }
-
   // 1. Create character item in library
   const createResult: any = await handleManageLibraryItem({
     roomId: params.roomId,
@@ -227,6 +204,20 @@ export async function handleCreateCharacterSheet(params: {
       success: false,
       error: "Character created but no codigoInterno returned",
       createResult,
+    };
+  }
+
+  // Se XML foi fornecido, importa diretamente
+  if (params.xml) {
+    await handleEditSheetNDB({
+      roomId: params.roomId,
+      codigoInterno,
+      xml: params.xml,
+    });
+    return {
+      success: true,
+      item: charItem,
+      importedXml: true,
     };
   }
 
@@ -378,22 +369,28 @@ export function registerNdbTools(server: McpServer): void {
     }
   );
 
-  // 4. edit_sheet_ndb (Trava de segurança: apenas na mesa 239256)
+  // 4. edit_sheet_ndb
   server.tool(
     "edit_sheet_ndb",
-    "Modifica atributos ou sub-nós no Node Database (NDB) de uma ficha de personagem. Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    "Modifica atributos ou sub-nós no Node Database (NDB) de uma ficha de personagem ou importa seu XML completo.",
     {
-      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      room_id: z.number().describe("codigoInterno da mesa"),
       codigo_interno: z.number().describe("codigoInterno do personagem na biblioteca"),
       operations: z
         .array(NodeOperationSchema)
+        .optional()
         .describe("Lista de operações a aplicar (action: 'set'|'delete', path: 'caminho.campo', value: ...)"),
+      xml: z
+        .string()
+        .optional()
+        .describe("XML completo a ser importado diretamente no NDB da ficha"),
     },
-    async ({ room_id, codigo_interno, operations }) => {
+    async ({ room_id, codigo_interno, operations, xml }) => {
       const result = await handleEditSheetNDB({
         roomId: room_id,
         codigoInterno: codigo_interno,
         operations,
+        xml,
       });
       return {
         content: [
@@ -455,12 +452,12 @@ export function registerNdbTools(server: McpServer): void {
     }
   );
 
-  // 6. edit_dock_ndb (Trava de segurança: apenas na mesa 239256)
+  // 6. edit_dock_ndb
   server.tool(
     "edit_dock_ndb",
-    "Modifica atributos ou sub-nós em um Node Database de janela acoplável (Dock NDB) da mesa. Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    "Modifica atributos ou sub-nós em um Node Database de janela acoplável (Dock NDB) da mesa.",
     {
-      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      room_id: z.number().describe("codigoInterno da mesa"),
       name: z.string().describe("Identificador do NodeDatabase da mesa (dataType/nome)"),
       operations: z
         .array(NodeOperationSchema)
@@ -488,12 +485,12 @@ export function registerNdbTools(server: McpServer): void {
     }
   );
 
-  // 7. manage_library_item (Trava de segurança: apenas na mesa 239256)
+  // 7. manage_library_item
   server.tool(
     "manage_library_item",
-    "Cria pastas ou personagens, atualiza nomes/avatares, move ou remove itens da biblioteca. Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    "Cria pastas ou personagens, atualiza nomes/avatares, move ou remove itens da biblioteca.",
     {
-      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      room_id: z.number().describe("codigoInterno da mesa"),
       action: z
         .enum(["create_dir", "create_char", "update", "delete", "move"])
         .describe("Ação na biblioteca: create_dir (criar pasta), create_char (criar personagem), update (atualizar), delete (remover), move (mover para outra pasta)"),
@@ -508,15 +505,15 @@ export function registerNdbTools(server: McpServer): void {
       name: z
         .string()
         .optional()
-        .describe("Nome do item a ser criado ou atualizado"),
+        .describe("Nome do item (para create_dir, create_char ou update)"),
       data_type: z
         .string()
         .optional()
-        .describe("dataType da ficha ao criar personagem (ex: 'alteris.fichas', 'dnd5e', 'default')"),
+        .describe("dataType do modelo de ficha (para create_char)"),
       changes: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe("Objeto contendo alterações de propriedades para update"),
+        .describe("Campos a atualizar (para update)"),
     },
     async ({ room_id, action, parent_codigo, codigo_interno, name, data_type, changes }) => {
       const result = await handleManageLibraryItem({
@@ -539,12 +536,12 @@ export function registerNdbTools(server: McpServer): void {
     }
   );
 
-  // 8. manage_room (Trava de segurança: apenas na mesa 239256)
+  // 8. manage_room
   server.tool(
     "manage_room",
-    "Lê detalhes ou altera configurações administrativas de uma mesa (ex: moderação). Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    "Lê detalhes ou altera configurações administrativas de uma mesa (ex: moderação).",
     {
-      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      room_id: z.number().describe("codigoInterno da mesa"),
       action: z
         .enum(["get_details", "set_moderada"])
         .describe("Ação administrativa"),
@@ -594,12 +591,12 @@ export function registerNdbTools(server: McpServer): void {
     }
   );
 
-  // 10. create_character_sheet (Trava de segurança: apenas na mesa 239256)
+  // 10. create_character_sheet
   server.tool(
     "create_character_sheet",
-    "Cria um novo personagem na biblioteca com um modelo de ficha específico e opcionalmente inicializa toda a estrutura de nós (NDB) com base no template extraído do RPK (com suporte a módulos, abas e recordLists). Por segurança, habilitado exclusivamente para a mesa de testes 'tttttaaaaa' (id 239256).",
+    "Cria um novo personagem na biblioteca com um modelo de ficha específico e opcionalmente inicializa toda a estrutura de nós (NDB) com base no template extraído do RPK ou importa seu XML completo.",
     {
-      room_id: z.number().describe("codigoInterno da mesa (deve ser 239256)"),
+      room_id: z.number().describe("codigoInterno da mesa"),
       name: z.string().describe("Nome do personagem a ser criado"),
       data_type: z
         .string()
@@ -616,8 +613,12 @@ export function registerNdbTools(server: McpServer): void {
         .record(z.string(), z.unknown())
         .optional()
         .describe("Objeto com valores iniciais para mesclar sobre a estrutura padrão da ficha (ex: { nome: 'Conan', atributos: { forca: 18 } })"),
+      xml: z
+        .string()
+        .optional()
+        .describe("XML completo da ficha a ser importado após a criação"),
     },
-    async ({ room_id, name, data_type, parent_codigo, auto_structure, initial_data }) => {
+    async ({ room_id, name, data_type, parent_codigo, auto_structure, initial_data, xml }) => {
       const result = await handleCreateCharacterSheet({
         roomId: room_id,
         name,
@@ -625,6 +626,7 @@ export function registerNdbTools(server: McpServer): void {
         parentCodigo: parent_codigo,
         autoStructure: auto_structure,
         initialData: initial_data,
+        xml,
       });
       return {
         content: [

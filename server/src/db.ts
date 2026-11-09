@@ -182,6 +182,22 @@ function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_characters_room ON characters(room_id);
     CREATE INDEX IF NOT EXISTS idx_characters_code ON characters(code);
     CREATE INDEX IF NOT EXISTS idx_characters_name ON characters(name);
+
+    CREATE TABLE IF NOT EXISTS character_sheets (
+      room_id           INTEGER NOT NULL,
+      codigo_interno    INTEGER NOT NULL,
+      character_name    TEXT,
+      data_type         TEXT,
+      data_json         TEXT NOT NULL,
+      raw_xml           TEXT,
+      sync_source       TEXT DEFAULT 'auto',
+      is_open_in_tab    INTEGER DEFAULT 0,
+      last_updated_at   INTEGER NOT NULL,
+      PRIMARY KEY (room_id, codigo_interno)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_character_sheets_room ON character_sheets(room_id);
+    CREATE INDEX IF NOT EXISTS idx_character_sheets_name ON character_sheets(character_name);
   `);
 
   try {
@@ -792,4 +808,231 @@ export function deleteCharacter(idOrCode: string, roomId?: number | null): boole
   run("DELETE FROM characters WHERE id = :id", { ":id": char.id });
   return true;
 }
+
+// --- Sincronização Bidirecional de Fichas (Character Sheets) ---
+
+export interface CharacterSheetRow {
+  room_id: number;
+  codigo_interno: number;
+  character_name: string;
+  data_type: string;
+  data: any;
+  raw_xml?: string | null;
+  sync_source: string;
+  is_open_in_tab: boolean;
+  last_updated_at: number;
+}
+
+export function applyNestedDeltas(target: any, changes: Record<string, any>): any {
+  if (typeof target !== "object" || target === null) {
+    target = {};
+  }
+
+  for (const [path, value] of Object.entries(changes)) {
+    if (!path || path === "." || path === "/") {
+      if (typeof value === "object" && value !== null) {
+        Object.assign(target, value);
+      }
+      continue;
+    }
+
+    const parts = path.split(/[./\\]+/).filter(Boolean);
+    if (parts.length === 0) continue;
+
+    let current = target;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i];
+      if (current[part] === undefined || current[part] === null || typeof current[part] !== "object") {
+        current[part] = {};
+      }
+      current = current[part];
+    }
+
+    const finalKey = parts[parts.length - 1];
+    if (value === null || value === undefined) {
+      delete current[finalKey];
+    } else {
+      current[finalKey] = value;
+    }
+  }
+
+  return target;
+}
+
+export function upsertSheetSnapshot(params: {
+  roomId: number;
+  codigoInterno: number;
+  characterName: string;
+  dataType: string;
+  syncSource?: string;
+  isOpenInTab?: boolean;
+  data: any;
+  rawXml?: string | null;
+  timestamp?: number;
+}): void {
+  const now = params.timestamp ?? Math.floor(Date.now() / 1000);
+  const dataJson = typeof params.data === "string" ? params.data : JSON.stringify(params.data ?? {});
+
+  run(
+    `INSERT INTO character_sheets (
+      room_id, codigo_interno, character_name, data_type, data_json, raw_xml, sync_source, is_open_in_tab, last_updated_at
+    ) VALUES (
+      :room_id, :codigo_interno, :character_name, :data_type, :data_json, :raw_xml, :sync_source, :is_open_in_tab, :last_updated_at
+    ) ON CONFLICT(room_id, codigo_interno) DO UPDATE SET
+      character_name = excluded.character_name,
+      data_type = excluded.data_type,
+      data_json = excluded.data_json,
+      raw_xml = COALESCE(excluded.raw_xml, character_sheets.raw_xml),
+      sync_source = COALESCE(excluded.sync_source, character_sheets.sync_source),
+      is_open_in_tab = excluded.is_open_in_tab,
+      last_updated_at = excluded.last_updated_at`,
+    {
+      ":room_id": params.roomId,
+      ":codigo_interno": params.codigoInterno,
+      ":character_name": params.characterName || "",
+      ":data_type": params.dataType || "",
+      ":data_json": dataJson,
+      ":raw_xml": params.rawXml ?? null,
+      ":sync_source": params.syncSource || "auto",
+      ":is_open_in_tab": params.isOpenInTab ? 1 : 0,
+      ":last_updated_at": now,
+    }
+  );
+
+  // Se houver personagem correspondente no MCP, atualiza os dados básicos
+  try {
+    const existingChar = queryOne<any>(
+      `SELECT id FROM characters WHERE room_id = ? AND (sheet_codigo = ? OR name = ?) LIMIT 1`,
+      [params.roomId, params.codigoInterno, params.characterName]
+    );
+    if (existingChar) {
+      run(
+        `UPDATE characters SET
+          sheet_codigo = :sheet_codigo,
+          sheet_data_type = :sheet_data_type,
+          updated_at = :updated_at
+        WHERE id = :id`,
+        {
+          ":id": existingChar.id,
+          ":sheet_codigo": params.codigoInterno,
+          ":sheet_data_type": params.dataType,
+          ":updated_at": now,
+        }
+      );
+    }
+  } catch {}
+}
+
+export function applySheetDeltas(params: {
+  roomId: number;
+  codigoInterno: number;
+  characterName?: string;
+  dataType?: string;
+  syncSource?: string;
+  isOpenInTab?: boolean;
+  changes: Record<string, any>;
+  timestamp?: number;
+}): void {
+  const now = params.timestamp ?? Math.floor(Date.now() / 1000);
+
+  const existing = queryOne<{ data_json: string; character_name: string; data_type: string }>(
+    `SELECT data_json, character_name, data_type FROM character_sheets WHERE room_id = ? AND codigo_interno = ?`,
+    [params.roomId, params.codigoInterno]
+  );
+
+  let currentData: any = {};
+  if (existing?.data_json) {
+    try {
+      currentData = JSON.parse(existing.data_json);
+    } catch {
+      currentData = {};
+    }
+  }
+
+  applyNestedDeltas(currentData, params.changes);
+  const updatedJson = JSON.stringify(currentData);
+
+  run(
+    `INSERT INTO character_sheets (
+      room_id, codigo_interno, character_name, data_type, data_json, sync_source, is_open_in_tab, last_updated_at
+    ) VALUES (
+      :room_id, :codigo_interno, :character_name, :data_type, :data_json, :sync_source, :is_open_in_tab, :last_updated_at
+    ) ON CONFLICT(room_id, codigo_interno) DO UPDATE SET
+      character_name = COALESCE(:character_name, character_sheets.character_name),
+      data_type = COALESCE(:data_type, character_sheets.data_type),
+      data_json = :data_json,
+      sync_source = COALESCE(:sync_source, character_sheets.sync_source),
+      is_open_in_tab = COALESCE(:is_open_in_tab, character_sheets.is_open_in_tab),
+      last_updated_at = :last_updated_at`,
+    {
+      ":room_id": params.roomId,
+      ":codigo_interno": params.codigoInterno,
+      ":character_name": params.characterName || existing?.character_name || "",
+      ":data_type": params.dataType || existing?.data_type || "",
+      ":data_json": updatedJson,
+      ":sync_source": params.syncSource || "auto",
+      ":is_open_in_tab": params.isOpenInTab !== undefined ? (params.isOpenInTab ? 1 : 0) : null,
+      ":last_updated_at": now,
+    }
+  );
+}
+
+export function getSheetFromDb(roomId: number, codigoInterno: number): CharacterSheetRow | null {
+  const row = queryOne<any>(
+    `SELECT * FROM character_sheets WHERE room_id = ? AND codigo_interno = ?`,
+    [roomId, codigoInterno]
+  );
+  if (!row) return null;
+
+  let parsedData: any = {};
+  try {
+    parsedData = JSON.parse(row.data_json);
+  } catch {}
+
+  return {
+    room_id: row.room_id,
+    codigo_interno: row.codigo_interno,
+    character_name: row.character_name,
+    data_type: row.data_type,
+    data: parsedData,
+    raw_xml: row.raw_xml,
+    sync_source: row.sync_source,
+    is_open_in_tab: !!row.is_open_in_tab,
+    last_updated_at: row.last_updated_at,
+  };
+}
+
+export function listSheetsFromDb(roomId?: number | null): CharacterSheetRow[] {
+  let rows: any[];
+  if (roomId) {
+    rows = query<any>(
+      `SELECT * FROM character_sheets WHERE room_id = ? ORDER BY last_updated_at DESC, character_name ASC`,
+      [roomId]
+    );
+  } else {
+    rows = query<any>(
+      `SELECT * FROM character_sheets ORDER BY last_updated_at DESC, character_name ASC`
+    );
+  }
+
+  return rows.map((row) => {
+    let parsedData: any = {};
+    try {
+      parsedData = JSON.parse(row.data_json);
+    } catch {}
+
+    return {
+      room_id: row.room_id,
+      codigo_interno: row.codigo_interno,
+      character_name: row.character_name,
+      data_type: row.data_type,
+      data: parsedData,
+      raw_xml: row.raw_xml,
+      sync_source: row.sync_source,
+      is_open_in_tab: !!row.is_open_in_tab,
+      last_updated_at: row.last_updated_at,
+    };
+  });
+}
+
 
