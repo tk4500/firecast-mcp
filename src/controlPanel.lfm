@@ -1,0 +1,455 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<form formType="tablesDock" dataType="com.tkplayer.firecast_mcp.dock" name="frmFirecastMcpDock" title="Firecast MCP" width="460" height="620">
+    <style>
+        .headerTitle {
+            fontColor: #00E5FF;
+            fontSize: 15;
+            fontStyle: bold;
+        }
+        .headerSub {
+            fontColor: #8E8EA0;
+            fontSize: 11;
+        }
+        .sectionTitle {
+            fontColor: #00E5FF;
+            fontSize: 12;
+            fontStyle: bold;
+        }
+        .itemLabel {
+            fontColor: #C0C0D0;
+            fontSize: 11;
+            fontStyle: bold;
+        }
+        .hintText {
+            fontColor: #7A7A8C;
+            fontSize: 10;
+        }
+        .cardBg {
+            color: #18181C;
+            strokeColor: #2C2C36;
+            strokeSize: 1;
+            xradius: 5;
+            yradius: 5;
+        }
+        .btnPrimary {
+            color: #1F2430;
+            strokeColor: #00E5FF;
+            strokeSize: 1;
+            xradius: 4;
+            yradius: 4;
+            cursor: handPoint;
+        }
+        .btnSecondary {
+            color: #1A1A22;
+            strokeColor: #383848;
+            strokeSize: 1;
+            xradius: 4;
+            yradius: 4;
+            cursor: handPoint;
+        }
+    </style>
+
+    <script>
+        <![CDATA[
+        local Firecast = require("firecast.lua");
+        local Dialogs  = require("dialogs.lua");
+        local VHD      = require("vhd.lua");
+        local json     = require("json.lua");
+        local GUI      = require("gui.lua");
+
+        local memNode = NDB.newMemNodeDatabase();
+        local CONFIG_FILE = "/mcp/config.json";
+
+        local function log(msg)
+            pcall(function()
+                local f = VHD.openFile("/mcp/debug.txt", "a");
+                if f ~= nil then
+                    f:writeBinary("utf8", "[ControlPanel] " .. tostring(msg) .. "\n");
+                    f:close();
+                end
+            end);
+        end
+
+        local function loadConfigFromVHD()
+            VHD.forceDirectory("/mcp");
+            if VHD.fileExists(CONFIG_FILE) then
+                local file = VHD.openFile(CONFIG_FILE, "r");
+                if file ~= nil then
+                    local content = file:readBinary("utf8");
+                    file:close();
+                    if content and content ~= "" then
+                        local ok, data = pcall(json.decode, content);
+                        if ok and type(data) == "table" then
+                            return data;
+                        end
+                    end
+                end
+            end
+            return {
+                storage_provider = "auto",
+                gdrive_assets_dir = "G:/Meu Drive/Firecast Assets",
+                http_port = 3000,
+                poll_interval_ms = 500,
+                version = "1.0.0"
+            };
+        end
+
+        local function saveConfigToVHD(cfg)
+            VHD.forceDirectory("/mcp");
+            local file, err = VHD.openFile(CONFIG_FILE, "w+");
+            if file ~= nil then
+                file:writeBinary("utf8", json.encode(cfg));
+                file:close();
+                return true;
+            end
+            return false;
+        end
+
+        function self:carregarConfig()
+            local cfg = loadConfigFromVHD();
+            memNode.storage_provider = cfg.storage_provider or "auto";
+            memNode.gdrive_assets_dir = cfg.gdrive_assets_path or cfg.gdrive_assets_dir or "G:/Meu Drive/Firecast Assets";
+            memNode.http_port = tostring(cfg.http_port or 3000);
+            memNode.poll_interval_ms = tostring(cfg.poll_interval_ms or 500);
+            memNode.db_path = cfg.db_path or "";
+            self.boxConfig.node = memNode;
+        end
+
+        function self:salvarConfig()
+            local cfg = loadConfigFromVHD();
+            cfg.storage_provider = memNode.storage_provider or "auto";
+            cfg.gdrive_assets_path = memNode.gdrive_assets_dir or "G:/Meu Drive/Firecast Assets";
+            cfg.gdrive_assets_dir = cfg.gdrive_assets_path;
+            cfg.http_port = tonumber(memNode.http_port) or 3000;
+            cfg.poll_interval_ms = tonumber(memNode.poll_interval_ms) or 500;
+
+            if memNode.db_path and memNode.db_path ~= "" then
+                cfg.db_path = memNode.db_path;
+            else
+                cfg.db_path = nil;
+            end
+
+            local ok = saveConfigToVHD(cfg);
+            if ok then
+                Dialogs.showMessage("Configurações do MCP salvas com sucesso!");
+            else
+                Dialogs.showMessage("Erro ao gravar configurações no VHD.");
+            end
+        end
+
+        function self:detectarPastaPadrao()
+            memNode.gdrive_assets_dir = "G:/Meu Drive/Firecast Assets";
+        end
+
+        function self:selecionarImagemFirecast()
+            local currentRoom = Firecast.getRoom(self) or Firecast.getCurrentRoom();
+            Dialogs.selectImageURL(nil, function(url)
+                if url and url ~= "" then
+                    memNode.quick_image_url = url;
+                end
+            end);
+        end
+
+        function self:enviarImagemChat()
+            local currentRoom = Firecast.getRoom(self) or Firecast.getCurrentRoom();
+            if not currentRoom then
+                Dialogs.showMessage("Nenhuma mesa conectada encontrada.");
+                return;
+            end
+
+            local chat = currentRoom.chat;
+            if not chat then
+                Dialogs.showMessage("Chat principal da mesa indisponível.");
+                return;
+            end
+
+            local url = memNode.quick_image_url;
+            if not url or url == "" then
+                Dialogs.showMessage("Informe ou selecione uma URL/arquivo de imagem primeiro.");
+                return;
+            end
+
+            url = url:gsub("^%s+", ""):gsub("%s+$", "");
+
+            -- Se for URL direta, envia formato Talemark
+            if url:find("^https?://") then
+                chat:enviarMensagem("[§I " .. url .. "]");
+                Dialogs.showMessage("Imagem enviada para o chat da mesa!");
+            else
+                -- Se for nome de arquivo do Google Drive
+                chat:escrever("[MCP] Para enviar arquivo local do Google Drive, use a ferramenta de mídia ou coloque o link direto.");
+            end
+        end
+
+        function self:copiarTalemark()
+            local url = memNode.quick_image_url;
+            if not url or url == "" then
+                Dialogs.showMessage("Nenhuma imagem selecionada.");
+                return;
+            end
+            local code = "[§I " .. url .. "]";
+            GUI.setClipboardText(code);
+            Dialogs.showMessage("Código Talemark copiado para a Área de Transferência:\n" .. code);
+        end
+
+        function self:carregarModelosFichas()
+            local lib = nil;
+            if Firecast.Plugins and Firecast.Plugins.getInstalledDataTypes then
+                lib = Firecast.Plugins;
+            elseif rrpg and rrpg.plugins and rrpg.plugins.getInstalledDataTypes then
+                lib = rrpg.plugins;
+            end
+
+            if not lib then
+                Dialogs.showMessage("Biblioteca de plugins do SDK3 indisponível.");
+                return;
+            end
+
+            local types = lib.getInstalledDataTypes();
+            if not types or #types == 0 then
+                Dialogs.showMessage("Nenhum modelo de ficha encontrado.");
+                return;
+            end
+
+            local items = {};
+            local values = {};
+            for _, t in ipairs(types) do
+                if t.dataType and t.dataType ~= "" then
+                    local title = t.title or t.dataType;
+                    table.insert(items, title .. " (" .. t.dataType .. ")");
+                    table.insert(values, t.dataType);
+                end
+            end
+
+            self.cbxDataTypes.items = items;
+            self.cbxDataTypes.values = values;
+            if #values > 0 then
+                self.cbxDataTypes.value = values[1];
+            end
+        end
+
+        function self:criarFichaSelecionada()
+            local dt = self.cbxDataTypes.value;
+            if not dt or dt == "" then
+                Dialogs.showMessage("Selecione um modelo de ficha primeiro.");
+                return;
+            end
+
+            local currentRoom = Firecast.getRoom(self) or Firecast.getCurrentRoom();
+            if not currentRoom then
+                Dialogs.showMessage("Nenhuma mesa conectada encontrada.");
+                return;
+            end
+
+            local bib = currentRoom.biblioteca;
+            if not bib then
+                Dialogs.showMessage("Biblioteca da mesa indisponível.");
+                return;
+            end
+
+            local ok, item = pcall(function()
+                return bib:criarPersonagem();
+            end);
+
+            if ok and item then
+                item.dataType = dt;
+                local nome = memNode.novoNomeFicha or ("Nova Ficha " .. dt:match("[^%.]+$") or dt);
+                item.nome = nome;
+                Dialogs.showMessage("Ficha criada com sucesso na Biblioteca da mesa!\nNome: " .. nome);
+            else
+                Dialogs.showMessage("Erro ao criar personagem na biblioteca: " .. tostring(item));
+            end
+        end
+
+        ]]>
+    </script>
+
+    <event name="onShow">
+        self:carregarConfig();
+        pcall(function() self:carregarModelosFichas(); end);
+    </event>
+
+    <!-- Fundo Principal -->
+    <rectangle align="client" color="#121215">
+        <!-- Topo / Cabeçalho -->
+        <layout align="top" height="50" margins="{left=12, right=12, top=10, bottom=6}">
+            <rectangle align="client" class="cardBg">
+                <layout align="left" width="300" margins="{left=10, top=6, bottom=6}">
+                    <label align="top" text="FIRECAST MCP" class="headerTitle" height="20"/>
+                    <label align="top" text="Painel de Controle e Integração Inteligente" class="headerSub" height="15"/>
+                </layout>
+                <layout align="right" width="110" margins="{right=10, top=10, bottom=10}">
+                    <rectangle name="btnSalvarTopo" align="client" class="btnPrimary" onClick="self:salvarConfig()">
+                        <label align="client" text="Salvar Config" horzTextAlign="center" vertTextAlign="center" fontColor="#00E5FF" fontSize="11" fontStyle="bold"/>
+                    </rectangle>
+                </layout>
+            </rectangle>
+        </layout>
+
+        <!-- Container de Dados em Memória -->
+        <dataScopeBox name="boxConfig" align="client" margins="{left=12, right=12, bottom=12}">
+            <tabControl align="client">
+
+                <!-- ABA 1: ARMAZENAMENTO & MÍDIA -->
+                <tab title="Mídia &amp; Google Drive">
+                    <scrollBox align="client" margins="{left=8, right=8, top=8, bottom=8}">
+
+                        <!-- Card de Configuração de Provedor -->
+                        <layout align="top" height="135" margins="{bottom=10}">
+                            <rectangle align="client" class="cardBg">
+                                <layout align="top" height="24" margins="{left=10, right=10, top=8}">
+                                    <label align="client" text="PROVEDOR DE ARMAZENAMENTO" class="sectionTitle"/>
+                                </layout>
+                                <layout align="top" height="25" margins="{left=10, right=10, top=4}">
+                                    <label align="left" width="130" text="Provedor Ativo:" class="itemLabel"/>
+                                    <comboBox align="client" field="storage_provider"
+                                              items="{'Auto (Detectar Google Drive)', 'Google Drive (Local)', 'FireDrive (Nuvem Oficial)'}"
+                                              values="{'auto', 'gdrive', 'firedrive'}"
+                                              margins="{left=5}"/>
+                                </layout>
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="130" text="Pasta Google Drive:" class="itemLabel"/>
+                                    <edit align="client" field="gdrive_assets_dir" textPrompt="G:/Meu Drive/Firecast Assets" margins="{left=5}"/>
+                                </layout>
+                                <layout align="top" height="24" margins="{left=10, right=10, top=6}">
+                                    <rectangle align="right" width="120" class="btnSecondary" onClick="self:detectarPastaPadrao()">
+                                        <label align="client" text="Detectar Padrão" horzTextAlign="center" vertTextAlign="center" fontColor="#B0B0D0" fontSize="10"/>
+                                    </rectangle>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                        <!-- Card de Informação sobre Permissões do Google Drive -->
+                        <layout align="top" height="75" margins="{bottom=10}">
+                            <rectangle align="client" color="#172228" strokeColor="#007A8A" strokeSize="1" xradius="5" yradius="5">
+                                <layout align="client" margins="{left=10, right=10, top=6, bottom=6}">
+                                    <label align="top" text="Dica Importante do Google Drive:" fontColor="#00E5FF" fontSize="11" fontStyle="bold" height="18"/>
+                                    <label align="client" text="Defina a permissão da pasta no Google Drive como 'Qualquer pessoa com o link pode ver'. Assim o Firecast exibe as imagens diretamente sem pedir login!" fontColor="#B8D0D8" fontSize="10" wordWrap="true"/>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                        <!-- Card de Envio Rápido de Imagens ao Chat -->
+                        <layout align="top" height="175" margins="{bottom=10}">
+                            <rectangle align="client" class="cardBg">
+                                <layout align="top" height="24" margins="{left=10, right=10, top=8}">
+                                    <label align="client" text="ENVIO RÁPIDO DE IMAGEM PARA O CHAT" class="sectionTitle"/>
+                                </layout>
+                                <layout align="top" height="25" margins="{left=10, right=10, top=4}">
+                                    <label align="left" width="100" text="URL da Imagem:" class="itemLabel"/>
+                                    <edit align="client" field="quick_image_url" textPrompt="https://lh3.googleusercontent.com/... ou URL pública" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="30" margins="{left=10, right=10, top=8}">
+                                    <rectangle align="client" class="btnSecondary" onClick="self:selecionarImagemFirecast()">
+                                        <label align="client" text="📁 Escolher Imagem (Seletor Firecast)" horzTextAlign="center" vertTextAlign="center" fontColor="#00E5FF" fontSize="11" fontStyle="bold"/>
+                                    </rectangle>
+                                </layout>
+
+                                <layout align="top" height="30" margins="{left=10, right=10, top=8}">
+                                    <rectangle align="left" width="190" class="btnPrimary" onClick="self:enviarImagemChat()">
+                                        <label align="client" text="💬 Enviar Imagem ao Chat" horzTextAlign="center" vertTextAlign="center" fontColor="#00E5FF" fontSize="11" fontStyle="bold"/>
+                                    </rectangle>
+                                    <rectangle align="right" width="190" class="btnSecondary" onClick="self:copiarTalemark()">
+                                        <label align="client" text="📋 Copiar Código Talemark" horzTextAlign="center" vertTextAlign="center" fontColor="#B0B0D0" fontSize="11"/>
+                                    </rectangle>
+                                </layout>
+
+                                <layout align="top" height="20" margins="{left=10, right=10, top=4}">
+                                    <label align="client" text="Envia como [§I URL] formatado no chat principal da mesa ativa." class="hintText"/>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                    </scrollBox>
+                </tab>
+
+                <!-- ABA 2: SERVIDOR & CONFIGURAÇÕES -->
+                <tab title="Servidor MCP">
+                    <scrollBox align="client" margins="{left=8, right=8, top=8, bottom=8}">
+
+                        <!-- Card de Status do Servidor -->
+                        <layout align="top" height="85" margins="{bottom=10}">
+                            <rectangle align="client" color="#162218" strokeColor="#2E6930" strokeSize="1" xradius="5" yradius="5">
+                                <layout align="client" margins="{left=12, right=12, top=8, bottom=8}">
+                                    <label align="top" text="STATUS DO MCP SERVER: CONECTADO" fontColor="#44FF88" fontSize="12" fontStyle="bold" height="20"/>
+                                    <label align="top" text="A ponte de comunicação (bridge) está ativa no cliente Firecast." fontColor="#90C898" fontSize="10" height="16"/>
+                                    <label align="top" text="Comandos disponíveis no chat: /mcp status, /mcp db &lt;caminho&gt;, /mcp help" fontColor="#609868" fontSize="10" height="16"/>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                        <!-- Parâmetros de Execução -->
+                        <layout align="top" height="170" margins="{bottom=10}">
+                            <rectangle align="client" class="cardBg">
+                                <layout align="top" height="24" margins="{left=10, right=10, top=8}">
+                                    <label align="client" text="PARÂMETROS DE CONEXÃO" class="sectionTitle"/>
+                                </layout>
+
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="140" text="Porta HTTP:" class="itemLabel"/>
+                                    <edit align="client" field="http_port" textPrompt="3000" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="140" text="Intervalo de Tick (ms):" class="itemLabel"/>
+                                    <edit align="client" field="poll_interval_ms" textPrompt="500" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="140" text="Banco SQLite Custom:" class="itemLabel"/>
+                                    <edit align="client" field="db_path" textPrompt="Padrão (&lt;VHD&gt;/mcp/firecast.db)" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="30" margins="{left=10, right=10, top=10}">
+                                    <rectangle align="client" class="btnPrimary" onClick="self:salvarConfig()">
+                                        <label align="client" text="Gravar Configurações no VHD" horzTextAlign="center" vertTextAlign="center" fontColor="#00E5FF" fontSize="11" fontStyle="bold"/>
+                                    </rectangle>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                    </scrollBox>
+                </tab>
+
+                <!-- ABA 3: CRIAÇÃO DE FICHAS COM MODELOS -->
+                <tab title="Modelos de Fichas">
+                    <scrollBox align="client" margins="{left=8, right=8, top=8, bottom=8}">
+
+                        <layout align="top" height="210" margins="{bottom=10}">
+                            <rectangle align="client" class="cardBg">
+                                <layout align="top" height="24" margins="{left=10, right=10, top=8}">
+                                    <label align="client" text="CRIAR FICHA A PARTIR DE TEMPLATE" class="sectionTitle"/>
+                                </layout>
+
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="120" text="Modelo Instalado:" class="itemLabel"/>
+                                    <comboBox name="cbxDataTypes" align="client" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="25" margins="{left=10, right=10, top=6}">
+                                    <label align="left" width="120" text="Nome da Ficha:" class="itemLabel"/>
+                                    <edit align="client" field="novoNomeFicha" textPrompt="Ex: Meu Personagem D&amp;D" margins="{left=5}"/>
+                                </layout>
+
+                                <layout align="top" height="32" margins="{left=10, right=10, top=10}">
+                                    <rectangle align="client" class="btnPrimary" onClick="self:criarFichaSelecionada()">
+                                        <label align="client" text="✨ Criar Ficha na Biblioteca da Mesa" horzTextAlign="center" vertTextAlign="center" fontColor="#00E5FF" fontSize="11" fontStyle="bold"/>
+                                    </rectangle>
+                                </layout>
+
+                                <layout align="top" height="28" margins="{left=10, right=10, top=6}">
+                                    <rectangle align="client" class="btnSecondary" onClick="self:carregarModelosFichas()">
+                                        <label align="client" text="🔄 Recarregar Lista de Modelos Instalados" horzTextAlign="center" vertTextAlign="center" fontColor="#B0B0D0" fontSize="10"/>
+                                    </rectangle>
+                                </layout>
+                            </rectangle>
+                        </layout>
+
+                    </scrollBox>
+                </tab>
+
+            </tabControl>
+        </dataScopeBox>
+    </rectangle>
+</form>

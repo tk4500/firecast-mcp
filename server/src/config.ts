@@ -54,7 +54,11 @@ export function readConfig(bridgeDir?: string): AppConfig {
 
   try {
     const content = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(content) as AppConfig;
+    const parsed = JSON.parse(content) as AppConfig & { gdrive_assets_dir?: string };
+    if (!parsed.gdrive_assets_path && parsed.gdrive_assets_dir) {
+      parsed.gdrive_assets_path = parsed.gdrive_assets_dir;
+    }
+    return parsed;
   } catch (err) {
     process.stderr.write(`[Firecast MCP] Aviso: erro ao ler config.json: ${err}\n`);
     return {

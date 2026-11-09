@@ -116,12 +116,34 @@ local function registerChatCommands()
 
             if param == "" or param == "status" then
                 message.chat:escrever("[Firecast MCP] Status: Ativo");
+                message.chat:escrever("[Firecast MCP] Storage: " .. tostring(cfg.storage_provider or "auto"));
+                if cfg.gdrive_assets_path or cfg.gdrive_assets_dir then
+                    message.chat:escrever("[Firecast MCP] GDrive Assets: " .. tostring(cfg.gdrive_assets_path or cfg.gdrive_assets_dir));
+                end
                 if cfg.db_path and cfg.db_path ~= "" then
                     message.chat:escrever("[Firecast MCP] Banco de Dados: " .. tostring(cfg.db_path));
                 else
                     message.chat:escrever("[Firecast MCP] Banco de Dados: Padrão (<VHD>/mcp/firecast.db)");
                 end
-                message.chat:escrever("[Firecast MCP] Comandos: /mcp db <caminho> | /mcp db reset | /mcp help");
+                message.chat:escrever("[Firecast MCP] Dica: Abra a janela acoplável 'Firecast MCP' nas janelas da mesa para o painel visual completo.");
+                message.chat:escrever("[Firecast MCP] Comandos: /mcp storage <auto|gdrive|firedrive> | /mcp gdrive <pasta> | /mcp db <caminho> | /mcp help");
+
+            elseif param:find("^storage%s+") then
+                local prov = param:match("^storage%s+(%w+)");
+                if prov == "auto" or prov == "gdrive" or prov == "firedrive" then
+                    cfg.storage_provider = prov;
+                    saveConfig(cfg);
+                    message.chat:escrever("[Firecast MCP] Provedor de armazenamento alterado para: " .. prov);
+                else
+                    message.chat:escrever("[Firecast MCP] Provedor inválido. Use: auto, gdrive ou firedrive");
+                end
+
+            elseif param:find("^gdrive%s+") then
+                local gpath = param:match("^gdrive%s+(.+)$");
+                cfg.gdrive_assets_path = gpath;
+                cfg.gdrive_assets_dir = gpath;
+                saveConfig(cfg);
+                message.chat:escrever("[Firecast MCP] Pasta de assets do Google Drive definida para: " .. gpath);
 
             elseif param:find("^db%s+") then
                 local newPath = param:match("^db%s+(.+)$");
