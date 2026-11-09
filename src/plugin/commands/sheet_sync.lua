@@ -8,8 +8,9 @@ local rrpgObjs = require("sdk/rrpgObjs.lua");
 local bridge   = require("plugin/bridge.lua");
 
 local function safeSetTimeout(callback, ms)
-    if _G.setTimeout ~= nil then
-        _G.setTimeout(callback, ms or 1);
+    local fnSetTimeout = rawget(_G, "setTimeout");
+    if fnSetTimeout ~= nil then
+        fnSetTimeout(callback, ms or 1);
     else
         local t;
         t = rrpgObjs.newTimer(ms or 1, function()
@@ -200,75 +201,6 @@ local function setNodeValueByPath(rootNode, pathStr, value)
 end
 
 --------------------------------------------------------------------------------
--- Envio de Eventos para a Outbox
---------------------------------------------------------------------------------
-
--- Envia snapshot completo de uma ficha
-local function sendSnapshot(tracked)
-    local okXml, xmlStr = pcall(NDB.exportXML, tracked.rootNode);
-    local dataObj = serializeNDBNode(tracked.rootNode, 8, 0);
-
-    bridge.emit("sheet_snapshot", {
-        roomId = tracked.roomId,
-        codigoInterno = tracked.codigoInterno,
-        characterName = tracked.charName,
-        dataType = tracked.dataType,
-        source = tracked.source,
-        isTabOpen = tracked.isTabOpen or false,
-        data = dataObj,
-        rawXml = okXml and xmlStr or nil,
-        timestamp = os.time(),
-    });
-end
-
--- Dispara debounce para acumular e emitir deltas
-local function triggerDebounce(tracked)
-    if tracked.debounceTimer ~= nil then
-        pcall(function() tracked.debounceTimer:setEnabled(false); end);
-        tracked.debounceTimer = nil;
-    end
-
-    tracked.debounceTimer = rrpgObjs.newTimer(350, function()
-        pcall(function() tracked.debounceTimer:setEnabled(false); end);
-        tracked.debounceTimer = nil;
-
-        local changesToEmit = tracked.pendingChanges;
-        tracked.pendingChanges = {};
-
-        local hasChanges = false;
-        for _ in pairs(changesToEmit) do
-            hasChanges = true;
-            break;
-        end
-
-        if hasChanges then
-            bridge.emit("sheet_change", {
-                roomId = tracked.roomId,
-                codigoInterno = tracked.codigoInterno,
-                characterName = tracked.charName,
-                dataType = tracked.dataType,
-                source = tracked.source,
-                isTabOpen = isCharacterOpenInClient(tracked.item),
-                changes = changesToEmit,
-                timestamp = os.time(),
-            });
-        end
-    end);
-end
-
--- Enfileira alteração em atributo
-local function queueAttributeChange(tracked, node, attribute)
-    local path = getNodePath(node, tracked.rootNode);
-    local fullKey = attribute;
-    if path ~= "" then
-        fullKey = path .. "." .. attribute;
-    end
-
-    tracked.pendingChanges[fullKey] = node[attribute];
-    triggerDebounce(tracked);
-end
-
---------------------------------------------------------------------------------
 -- Rastreamento e Observação de Fichas
 --------------------------------------------------------------------------------
 
@@ -315,56 +247,6 @@ local function trackCharacterSheet(mesa, item, source)
     end):onError(function(err)
         -- Falha silenciosa
     end);
-end
-
--- Varre a mesa para encontrar fichas de jogadores online e fichas abertas em abas
-local function scanTrackableSheets()
-    local rooms = Firecast.getRooms();
-    if not rooms then return; end
-
-    for r = 1, #rooms do
-        local mesa = rooms[r];
-
-        -- 1. Fichas dos jogadores conectados na mesa
-        local jogadores = mesa.jogadores;
-        if jogadores then
-            for j = 1, #jogadores do
-                local jog = jogadores[j];
-                local charId = jog.personagemPrincipal;
-                if charId and charId > 0 then
-                    local charItem = mesa:findBibliotecaItem(charId);
-                    if charItem and charItem.tipo == "personagem" then
-                        trackCharacterSheet(mesa, charItem, "player");
-                    end
-                end
-            end
-        end
-
-        -- 2. Fichas abertas em abas do cliente local (verificação recursiva na biblioteca)
-        local function checkOpenInFolder(folderItem)
-            if not folderItem then return; end
-            local children = folderItem.filhos or folderItem.children;
-            if not children then return; end
-
-            for c = 1, #children do
-                local child = children[c];
-                if child.tipo == "personagem" then
-                    local isOpen = isCharacterOpenInClient(child);
-                    if isOpen then
-                        trackCharacterSheet(mesa, child, "tab");
-                    elseif trackedSheets[child.codigoInterno] then
-                        trackedSheets[child.codigoInterno].isTabOpen = false;
-                    end
-                elseif child.tipo == "diretorio" or child.tipo == "pasta" then
-                    checkOpenInFolder(child);
-                end
-            end
-        end
-
-        if mesa.biblioteca then
-            checkOpenInFolder(mesa.biblioteca);
-        end
-    end
 end
 
 --------------------------------------------------------------------------------

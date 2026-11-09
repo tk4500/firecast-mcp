@@ -5,7 +5,6 @@ local Firecast = require("sdk/firecast.lua");
 local rrpgObjs = require("sdk/rrpgObjs.lua");
 
 local chatCommands = {};
-local _eventReceivers = {};
 
 local function safeGet(obj, prop)
     if obj == nil then return nil; end

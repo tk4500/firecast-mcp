@@ -16,11 +16,13 @@ local function getPluginsLib()
     if Firecast.plugins ~= nil then
         return Firecast.plugins;
     end
-    if rrpg ~= nil and rrpg.plugins ~= nil then
-        return rrpg.plugins;
+
+    local legacyRrpg = rawget(_G, "rrpg");
+    if legacyRrpg ~= nil and legacyRrpg.plugins ~= nil then
+        return legacyRrpg.plugins;
     end
-    if rrpg ~= nil and rrpg.Plugins ~= nil then
-        return rrpg.Plugins;
+    if legacyRrpg ~= nil and legacyRrpg.Plugins ~= nil then
+        return legacyRrpg.Plugins;
     end
 
     -- Fallback direto para funções C globais da engine do Firecast

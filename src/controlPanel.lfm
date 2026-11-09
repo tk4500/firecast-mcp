@@ -60,16 +60,6 @@
         local memNode = NDB.newMemNodeDatabase();
         local CONFIG_FILE = "/mcp/config.json";
 
-        local function log(msg)
-            pcall(function()
-                local f = VHD.openFile("/mcp/debug.txt", "a");
-                if f ~= nil then
-                    f:writeBinary("utf8", "[ControlPanel] " .. tostring(msg) .. "\n");
-                    f:close();
-                end
-            end);
-        end
-
         local function loadConfigFromVHD()
             VHD.forceDirectory("/mcp");
             if VHD.fileExists(CONFIG_FILE) then
@@ -96,7 +86,7 @@
 
         local function saveConfigToVHD(cfg)
             VHD.forceDirectory("/mcp");
-            local file, err = VHD.openFile(CONFIG_FILE, "w+");
+            local file = VHD.openFile(CONFIG_FILE, "w+");
             if file ~= nil then
                 file:writeBinary("utf8", json.encode(cfg));
                 file:close();
@@ -142,7 +132,6 @@
         end
 
         function self:selecionarImagemFirecast()
-            local currentRoom = Firecast.getRoom(self) or Firecast.getCurrentRoom();
             Dialogs.selectImageURL(nil, function(url)
                 if url and url ~= "" then
                     memNode.quick_image_url = url;
@@ -196,8 +185,8 @@
             local lib = nil;
             if Firecast.Plugins and Firecast.Plugins.getInstalledDataTypes then
                 lib = Firecast.Plugins;
-            elseif rrpg and rrpg.plugins and rrpg.plugins.getInstalledDataTypes then
-                lib = rrpg.plugins;
+            elseif Firecast.plugins and Firecast.plugins.getInstalledDataTypes then
+                lib = Firecast.plugins;
             end
 
             if not lib then

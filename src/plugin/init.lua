@@ -256,12 +256,13 @@ local function init()
     ok, err = pcall(registerEvents);
     logDebug("registerEvents: " .. tostring(ok) .. " " .. tostring(err) .. "\n");
 
-    if _G._firecastMcpTimer ~= nil then
-        pcall(function() _G._firecastMcpTimer:setEnabled(false); end);
+    local oldTimer = rawget(_G, "_firecastMcpTimer");
+    if oldTimer ~= nil then
+        pcall(function() oldTimer:setEnabled(false); end);
     end
 
     local tickCount = 0;
-    _G._firecastMcpTimer = rrpgObjs.newTimer(POLL_INTERVAL_MS, function()
+    _pollTimer = rrpgObjs.newTimer(POLL_INTERVAL_MS, function()
         tickCount = tickCount + 1;
         if tickCount <= 3 then
             logDebug("Timer ticked (" .. tostring(tickCount) .. ") at " .. tostring(os.time()) .. "\n");
@@ -271,6 +272,7 @@ local function init()
             logDebug("tick error: " .. tostring(errT) .. "\n");
         end
     end);
+    rawset(_G, "_firecastMcpTimer", _pollTimer);
     logDebug("Timer created!\n");
 end
 

@@ -278,7 +278,7 @@ function ndbCommands.list_library(args, reply)
     end
 
     local parentCodigo = args.parentCodigoInterno;
-    local startItem = nil;
+    local startItem;
 
     if parentCodigo ~= nil and tonumber(parentCodigo) then
         startItem = mesa:findBibliotecaItem(tonumber(parentCodigo));
@@ -521,7 +521,7 @@ function ndbCommands.open_dock_ndb(args, reply)
     local isUser = (args.isUser == true or args.isUser == "true");
     local create = (args.create == true or args.create == "true");
 
-    local promise = nil;
+    local promise;
     if isUser then
         promise = mesa:asyncOpenUserRoomNDB(name, { create = create });
     else
@@ -727,12 +727,12 @@ function ndbCommands.manage_library_item(args, reply)
 
     elseif action == "move" then
         local codigoInterno = tonumber(args.codigoInterno);
-        local parentCodigo = tonumber(args.parentCodigoInterno);
-        if not codigoInterno or not parentCodigo then
+        local targetParentCodigo = tonumber(args.parentCodigoInterno);
+        if not codigoInterno or not targetParentCodigo then
             return reply(false, "codigoInterno and parentCodigoInterno are required for move");
         end
         local item = mesa:findBibliotecaItem(codigoInterno);
-        local parentItem = mesa:findBibliotecaItem(parentCodigo) or mesa.biblioteca;
+        local parentItem = mesa:findBibliotecaItem(targetParentCodigo) or mesa.biblioteca;
         if not item or not parentItem then
             return reply(false, "Item or target parent item not found");
         end
