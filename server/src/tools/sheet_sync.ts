@@ -1,6 +1,9 @@
 // server/src/tools/sheet_sync.ts
-// Ferramentas MCP para sincronização bidirecional em tempo real de fichas (NDB).
-// Lê instantaneamente do cache SQLite (persistido via NodeObserver) e escreve com propagação segura para o cliente Firecast.
+// Ferramentas MCP de leitura/escrita simplificada de fichas (NDB) com cache SQLite.
+//
+// Observação: os observadores contínuos (NodeObserver) e a emissão de eventos em tempo real estão
+// DESATIVADOS no plugin Lua. O cache SQLite só é preenchido por leituras feitas por estas tools
+// (snapshot via get_sheet_ndb) e atualizado pelas escritas de update_character_sheet.
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,6 +15,7 @@ import {
   upsertSheetSnapshot,
   CharacterSheetRow,
 } from "../db.js";
+import { jsonResult, roomIdSchema, codigoInternoSchema } from "./common.js";
 
 // Helper: formata resposta amigável
 function formatSheetResponse(sheet: CharacterSheetRow) {
@@ -27,88 +31,65 @@ function formatSheetResponse(sheet: CharacterSheetRow) {
   };
 }
 
-export const sheetSyncTools = [
+/** Lê a ficha inteira ao vivo (get_sheet_ndb) e grava o snapshot completo no SQLite. */
+async function snapshotSheet(roomId: number, codigoInterno: number, syncSource: string): Promise<CharacterSheetRow | null> {
+  const ndbData = (await sendCommand("get_sheet_ndb", { roomId, codigoInterno })) as any;
+  upsertSheetSnapshot({
+    roomId,
+    codigoInterno,
+    characterName: ndbData?.characterName || ndbData?.name || "",
+    dataType: ndbData?.dataType || "",
+    data: ndbData?.data || {},
+    syncSource,
+  });
+  return getSheetFromDb(roomId, codigoInterno);
+}
+
+const sheetRefShape = {
+  room_id: roomIdSchema,
+  codigo_interno: codigoInternoSchema,
+};
+
+interface SheetSyncTool {
+  name: string;
+  description: string;
+  shape: z.ZodRawShape;
+  handler: (args: any) => Promise<unknown>;
+}
+
+export const sheetSyncTools: SheetSyncTool[] = [
   {
     name: "get_character_sheet",
     description:
-      "Obtém os dados em tempo real da ficha de personagem (NDB). Por padrão lê do cache SQLite continuamente sincronizado via NodeObserver. Se fresh=true, força a leitura ao vivo via bridge.",
-    parameters: z.object({
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-      fresh: z.boolean().optional().describe("Se true, força requisição direta ao vivo ao Firecast"),
-    }),
+      "Lê os dados de uma ficha de personagem, com cache. Por padrão devolve o último snapshot salvo no SQLite (instantâneo, mas pode estar desatualizado se a ficha mudou no Firecast); se não houver snapshot, ou com fresh=true, lê ao vivo e atualiza o cache. Retorna { source, sheet{ character_name, data_type, last_updated_at, data } }. Para ler só um trecho ou obter XML use get_sheet_ndb.",
+    shape: {
+      ...sheetRefShape,
+      fresh: z.boolean().optional().describe("true = ignora o cache e lê ao vivo do Firecast. Use quando a ficha pode ter mudado (ex: após o jogador editar). Padrão: false."),
+    },
     handler: async (args: { room_id: number; codigo_interno: number; fresh?: boolean }) => {
       if (!args.fresh) {
         const cached = getSheetFromDb(args.room_id, args.codigo_interno);
         if (cached && cached.data && Object.keys(cached.data).length > 0) {
-          return {
-            source: "sqlite_sync_cache",
-            sheet: formatSheetResponse(cached),
-          };
+          return { source: "sqlite_cache", sheet: formatSheetResponse(cached) };
         }
       }
 
-      // Se não encontrou no cache ou pediu fresh, requisita sincronização ao vivo
       try {
-        const syncRes = (await sendCommand("sync_sheet", {
-          roomId: args.room_id,
-          codigoInterno: args.codigo_interno,
-          source: "manual",
-        })) as any;
-
-        // Aguarda 150ms para o snapshot do bridge ser processado no watcher/SQLite
-        await new Promise((r) => setTimeout(r, 150));
-        const updated = getSheetFromDb(args.room_id, args.codigo_interno);
-        if (updated) {
-          return {
-            source: "firecast_live_sync",
-            sheet: formatSheetResponse(updated),
-          };
+        const sheet = await snapshotSheet(args.room_id, args.codigo_interno, "ndb_query");
+        if (sheet) {
+          return { source: "firecast_live", sheet: formatSheetResponse(sheet) };
         }
-
-        return {
-          source: "firecast_live_sync_pending",
-          message: "Sincronização iniciada com sucesso no Firecast. Dados em processamento.",
-          info: syncRes,
-        };
+        return { error: "Ficha lida, mas não foi possível gravar o snapshot no cache." };
       } catch (err: any) {
-        // Fallback para get_sheet_ndb clássico se sync_sheet falhar
-        try {
-          const ndbData = (await sendCommand("get_sheet_ndb", {
-            roomId: args.room_id,
-            codigoInterno: args.codigo_interno,
-          })) as any;
-
-          upsertSheetSnapshot({
-            roomId: args.room_id,
-            codigoInterno: args.codigo_interno,
-            characterName: ndbData?.name || "",
-            dataType: ndbData?.dataType || "",
-            data: ndbData?.data || {},
-            syncSource: "ndb_query",
-          });
-
+        const cachedFallback = getSheetFromDb(args.room_id, args.codigo_interno);
+        if (cachedFallback) {
           return {
-            source: "firecast_live_ndb",
-            sheet: {
-              room_id: args.room_id,
-              codigo_interno: args.codigo_interno,
-              character_name: ndbData?.name,
-              data_type: ndbData?.dataType,
-              data: ndbData?.data,
-            },
+            source: "sqlite_cache_stale",
+            warning: `Falha ao ler a ficha ao vivo (${err.message}). Retornando dados em cache.`,
+            sheet: formatSheetResponse(cachedFallback),
           };
-        } catch (ndbErr: any) {
-          const cachedFallback = getSheetFromDb(args.room_id, args.codigo_interno);
-          if (cachedFallback) {
-            return {
-              source: "sqlite_cache_stale",
-              warning: `Falha ao contatar bridge (${err.message}). Retornando dados em cache.`,
-              sheet: formatSheetResponse(cachedFallback),
-            };
-          }
-          return { error: `Falha ao obter ficha: ${err.message}` };
         }
+        return { error: `Falha ao obter ficha: ${err.message}` };
       }
     },
   },
@@ -116,45 +97,55 @@ export const sheetSyncTools = [
   {
     name: "update_character_sheet",
     description:
-      "Modifica campos ou sub-árvores na ficha de personagem (NDB) no Firecast de forma segura com cancelamento de eco (anti-loop). Os novos valores são sincronizados imediatamente no Firecast e no SQLite.",
-    parameters: z.object({
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
+      "Forma simples de alterar valores numa ficha de personagem: um dicionário { caminho: valor }. Grava no Firecast (sincroniza para todos na mesa) e atualiza o cache. Não remove campos — para apagar use edit_sheet_ndb com action='delete'. Os nomes dos campos dependem do modelo de ficha (leia a ficha antes com get_character_sheet ou veja get_sheet_template). Só funciona se você for mestre (+GM) da mesa; caso contrário o Firecast recusa a escrita.",
+    shape: {
+      ...sheetRefShape,
       changes: z
         .record(z.string(), z.any())
         .describe(
-          "Dicionário de alterações chave-valor. Suporta caminhos com notação de ponto (ex: {'pv': 45, 'atributos.forca': 18, 'inventario.moedas': 100}). Passar null apaga o campo."
+          "Mapa caminho → novo valor. Caminhos com ponto criam/navegam sub-nós. Ex: { 'pv': 45, 'atributos.forca': 18, 'inventario.moedas': 100 }. Valores null são ignorados."
         ),
-    }),
+    },
     handler: async (args: { room_id: number; codigo_interno: number; changes: Record<string, any> }) => {
-      // 1. Atualiza cache SQLite local imediatamente para leituras rápidas
-      applySheetDeltas({
-        roomId: args.room_id,
-        codigoInterno: args.codigo_interno,
-        changes: args.changes,
-        syncSource: "mcp_edit",
-      });
+      // JSON null vira nil no Lua e a chave some da tabela: nulls não teriam efeito no Firecast.
+      const changes: Record<string, any> = {};
+      const ignoredNulls: string[] = [];
+      for (const [k, v] of Object.entries(args.changes ?? {})) {
+        if (v === null || v === undefined) ignoredNulls.push(k);
+        else changes[k] = v;
+      }
+      if (Object.keys(changes).length === 0) {
+        return { error: "Nenhuma alteração válida em `changes` (valores null são ignorados; para apagar use edit_sheet_ndb action='delete')." };
+      }
 
-      // 2. Envia comando para a bridge atualizar o NDB da ficha no Firecast
       try {
         const res = (await sendCommand("update_sheet", {
           roomId: args.room_id,
           codigoInterno: args.codigo_interno,
-          changes: args.changes,
+          changes,
         })) as any;
 
+        // Só aplica no cache se já houver um snapshot completo; senão o cache ficaria com
+        // uma ficha parcial (apenas os campos alterados) e enganaria leituras futuras.
+        if (getSheetFromDb(args.room_id, args.codigo_interno)) {
+          applySheetDeltas({
+            roomId: args.room_id,
+            codigoInterno: args.codigo_interno,
+            changes,
+            syncSource: "mcp_edit",
+          });
+        }
         const updated = getSheetFromDb(args.room_id, args.codigo_interno);
 
         return {
           success: true,
-          message: "Ficha atualizada com sucesso no Firecast e no SQLite",
+          message: "Ficha atualizada no Firecast",
           result: res,
+          ignored_null_keys: ignoredNulls.length ? ignoredNulls : undefined,
           sheet: updated ? formatSheetResponse(updated) : undefined,
         };
       } catch (err: any) {
-        return {
-          error: `Falha ao enviar comando de atualização para a bridge: ${err.message}`,
-        };
+        return { error: `Falha ao atualizar a ficha no Firecast: ${err.message}` };
       }
     },
   },
@@ -162,26 +153,17 @@ export const sheetSyncTools = [
   {
     name: "list_synced_sheets",
     description:
-      "Lista todas as fichas atualmente sincronizadas e observadas na mesa, indicando quais pertencem a jogadores conectados e quais estão abertas em abas do Firecast.",
-    parameters: z.object({
-      room_id: z.number().optional().describe("ID da mesa (opcional)"),
-      fresh: z
-        .boolean()
-        .optional()
-        .describe("Se true, consulta a bridge para listar o estado dos observadores ativos"),
-    }),
+      "Lista as fichas conhecidas. Padrão: fichas com snapshot no cache SQLite (lidas antes por get_character_sheet/sync_character_sheet), com os dados. fresh=true: fichas rastreadas pelo plugin nesta sessão do Firecast, com isTabOpen (aberta numa aba do cliente), sem os dados.",
+    shape: {
+      room_id: z.number().int().optional().describe("Filtra por mesa (campo `id` de list_rooms). Omitido = todas."),
+      fresh: z.boolean().optional().describe("true = pergunta ao plugin quais fichas ele está rastreando agora. Padrão: false."),
+    },
     handler: async (args: { room_id?: number; fresh?: boolean }) => {
       if (args.fresh) {
         try {
-          const res = (await sendCommand("list_synced_sheets", {
-            roomId: args.room_id,
-          })) as any;
+          const res = (await sendCommand("list_synced_sheets", { roomId: args.room_id })) as any;
           if (res) {
-            return {
-              source: "firecast_live_bridge",
-              sheets: res.sheets || [],
-              total: res.total || 0,
-            };
+            return { source: "firecast_live", sheets: res.sheets || [], total: res.total || 0 };
           }
         } catch {}
       }
@@ -198,15 +180,11 @@ export const sheetSyncTools = [
   {
     name: "sync_character_sheet",
     description:
-      "Inicia ou força a sincronização contínua de uma ficha de personagem específica com observador em tempo real.",
-    parameters: z.object({
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-      source: z
-        .string()
-        .optional()
-        .describe("Marcador de origem da sincronização ('manual', 'tab', 'player', 'mcp')"),
-    }),
+      "Marca a ficha como rastreada pelo plugin e grava um snapshot completo e atualizado no cache SQLite. Equivale a get_character_sheet com fresh=true, mais o registro de rastreamento (visível em list_synced_sheets fresh=true). Observação: a sincronização contínua em tempo real está desativada no plugin; o cache só muda quando você lê ou escreve pelas tools.",
+    shape: {
+      ...sheetRefShape,
+      source: z.string().optional().describe("Rótulo livre de origem gravado no rastreamento ('manual', 'tab', 'player', 'mcp'). Padrão: 'manual'."),
+    },
     handler: async (args: { room_id: number; codigo_interno: number; source?: string }) => {
       try {
         const res = (await sendCommand("sync_sheet", {
@@ -214,19 +192,15 @@ export const sheetSyncTools = [
           codigoInterno: args.codigo_interno,
           source: args.source || "manual",
         })) as any;
-
-        // Aguarda 150ms para processamento do snapshot
-        await new Promise((r) => setTimeout(r, 150));
-        const sheet = getSheetFromDb(args.room_id, args.codigo_interno);
-
+        const sheet = await snapshotSheet(args.room_id, args.codigo_interno, args.source || "manual");
         return {
           success: true,
-          message: "Sincronização contínua ativada com sucesso para a ficha",
+          message: "Ficha rastreada e snapshot atualizado",
           result: res,
           sheet: sheet ? formatSheetResponse(sheet) : undefined,
         };
       } catch (err: any) {
-        return { error: `Falha ao iniciar sincronização: ${err.message}` };
+        return { error: `Falha ao sincronizar a ficha: ${err.message}` };
       }
     },
   },
@@ -234,23 +208,15 @@ export const sheetSyncTools = [
   {
     name: "open_character_sheet",
     description:
-      "Abre a ficha de personagem visualmente em uma aba da mesa no cliente Firecast e marca a ficha como aberta em aba para sincronização prioritária.",
-    parameters: z.object({
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-    }),
+      "Abre a ficha do personagem numa nova aba da interface do Firecast (na tela do usuário que roda o MCP) e a marca como rastreada. Não retorna os dados da ficha — use get_character_sheet para isso.",
+    shape: { ...sheetRefShape },
     handler: async (args: { room_id: number; codigo_interno: number }) => {
       try {
         const res = (await sendCommand("open_sheet_in_tab", {
           roomId: args.room_id,
           codigoInterno: args.codigo_interno,
         })) as any;
-
-        return {
-          success: true,
-          message: "Ficha aberta em aba no cliente Firecast",
-          result: res,
-        };
+        return { success: true, message: "Ficha aberta em aba no cliente Firecast", result: res };
       } catch (err: any) {
         return { error: `Falha ao abrir ficha: ${err.message}` };
       }
@@ -259,92 +225,7 @@ export const sheetSyncTools = [
 ];
 
 export function registerSheetSyncTools(server: McpServer): void {
-  // 1. get_character_sheet
-  server.tool(
-    "get_character_sheet",
-    "Obtém os dados em tempo real da ficha de personagem (NDB). Lê instantaneamente do cache SQLite mantido pelo NodeObserver ou direto do Firecast com fresh=true.",
-    {
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-      fresh: z.boolean().optional().describe("Se true, força consulta ao vivo via bridge"),
-    },
-    async (args) => {
-      const tool = sheetSyncTools.find((t) => t.name === "get_character_sheet")!;
-      const result = await tool.handler(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
-
-  // 2. update_character_sheet
-  server.tool(
-    "update_character_sheet",
-    "Modifica campos ou sub-árvores na ficha de personagem (NDB) com cancelamento de eco. Suporta notação de ponto (ex: 'pv': 50, 'atributos.forca': 18).",
-    {
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-      changes: z.record(z.string(), z.any()).describe("Dicionário de alterações chave-valor"),
-    },
-    async (args) => {
-      const tool = sheetSyncTools.find((t) => t.name === "update_character_sheet")!;
-      const result = await tool.handler(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
-
-  // 3. list_synced_sheets
-  server.tool(
-    "list_synced_sheets",
-    "Lista todas as fichas sincronizadas e observadas na mesa, indicando se pertencem a jogadores online ou se estão abertas em abas visuais do cliente Firecast.",
-    {
-      room_id: z.number().optional().describe("ID da mesa (opcional)"),
-      fresh: z.boolean().optional().describe("Se true, consulta a bridge em tempo real"),
-    },
-    async (args) => {
-      const tool = sheetSyncTools.find((t) => t.name === "list_synced_sheets")!;
-      const result = await tool.handler(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
-
-  // 4. sync_character_sheet
-  server.tool(
-    "sync_character_sheet",
-    "Inicia a sincronização contínua de uma ficha de personagem específica com observador em tempo real.",
-    {
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-      source: z.string().optional().describe("Origem da sincronização ('manual', 'tab', 'player')"),
-    },
-    async (args) => {
-      const tool = sheetSyncTools.find((t) => t.name === "sync_character_sheet")!;
-      const result = await tool.handler(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
-
-  // 5. open_character_sheet
-  server.tool(
-    "open_character_sheet",
-    "Abre a ficha de personagem em uma aba visual na interface do Firecast e marca a ficha para sincronização ativa.",
-    {
-      room_id: z.number().describe("ID da mesa"),
-      codigo_interno: z.number().describe("Código interno da ficha de personagem"),
-    },
-    async (args) => {
-      const tool = sheetSyncTools.find((t) => t.name === "open_character_sheet")!;
-      const result = await tool.handler(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
-  );
+  for (const tool of sheetSyncTools) {
+    server.tool(tool.name, tool.description, tool.shape, async (args: any) => jsonResult(await tool.handler(args)));
+  }
 }
-

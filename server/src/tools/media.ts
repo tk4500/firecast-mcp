@@ -16,6 +16,7 @@ import { readConfig, updateConfig, type AppConfig } from "../config.js";
 import { sendCommand } from "../bridge.js";
 import { handleSendChatMessage } from "./chat.js";
 import { handleImpersonateCharacter } from "./characters.js";
+import { jsonResult, roomIdSchema, chatIdSchema } from "./common.js";
 
 export interface MediaUploadResult {
   success: boolean;
@@ -358,147 +359,103 @@ export async function handleConfigureStorage(args?: ConfigureStorageArgs): Promi
  * Registra as ferramentas MCP de mídia no McpServer.
  */
 export function registerMediaTools(server: McpServer): void {
+  const providerSchema = z
+    .enum(["auto", "gdrive", "firedrive"])
+    .optional()
+    .describe("Onde hospedar: 'auto' (padrão; usa o Google Drive para Desktop se estiver montado, senão FireDrive), 'gdrive' (erro se o Drive não estiver montado) ou 'firedrive' (armazenamento do Firecast; exige o Firecast aberto).");
+
   server.tool(
     "upload_media",
-    "Faz upload de qualquer arquivo (imagem, mapa, áudio, PDF) para o Google Drive ou FireDrive e retorna URLs diretas prontas para o chat ou avatares.",
+    "Hospeda um arquivo local (imagem, mapa, áudio, PDF) e devolve URLs públicas para usar no chat ou como avatar. Informe file_path OU content_base64. Retorna { provider, url, talemark_image ('[§I url]', para colar numa mensagem e exibir a imagem), talemark_link, ... }. Não envia nada ao chat — para isso use send_media_to_chat.",
     {
-      file_path: z.string().optional().describe("Caminho absoluto de qualquer arquivo no computador (ex: 'C:/Imagens/token.png')."),
-      content_base64: z.string().optional().describe("Conteúdo do arquivo codificado em Base64 (alternativa a file_path)."),
-      filename: z.string().optional().describe("Nome do arquivo (ex: 'caverna_mapa.png')."),
-      provider: z.enum(["auto", "gdrive", "firedrive"]).optional().describe("Provedor de armazenamento: 'auto' (padrão), 'gdrive' (Google Drive local), ou 'firedrive' (blobs do Firecast)."),
-      subfolder: z.string().optional().describe("Subpasta de destino (ex: 'campanhas/tokens')."),
-      timeout_seconds: z.number().optional().describe("Tempo máximo em segundos aguardando sincronização do Drive (padrão: 25s)."),
+      file_path: z.string().optional().describe("Caminho absoluto do arquivo neste computador (ex: 'C:/Imagens/token.png'). Use este OU content_base64."),
+      content_base64: z.string().optional().describe("Conteúdo do arquivo em Base64 (sem prefixo 'data:'). Exige `filename` para definir o tipo."),
+      filename: z.string().optional().describe("Nome do arquivo de destino com extensão (ex: 'caverna_mapa.png'). Padrão: nome de file_path."),
+      provider: providerSchema,
+      subfolder: z.string().optional().describe("Subpasta de destino dentro da pasta de assets do Drive (ex: 'campanha1/tokens'). Só para gdrive."),
+      timeout_seconds: z.number().optional().describe("Quanto esperar o Google Drive sincronizar e gerar o link. Padrão: 25."),
     },
-    async (args) => {
-      const res = await handleUploadMedia({
-        filePath: args.file_path,
-        contentBase64: args.content_base64,
-        filename: args.filename,
-        provider: args.provider,
-        subfolder: args.subfolder,
-        timeoutSeconds: args.timeout_seconds,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(res, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) =>
+      jsonResult(
+        await handleUploadMedia({
+          filePath: args.file_path,
+          contentBase64: args.content_base64,
+          filename: args.filename,
+          provider: args.provider,
+          subfolder: args.subfolder,
+          timeoutSeconds: args.timeout_seconds,
+        })
+      )
   );
 
   server.tool(
     "get_media_url",
-    "Recupera links e formatações Talemark de um arquivo já existente no Google Drive para Computador sem re-upload.",
+    "Obtém as URLs (e o snippet Talemark) de um arquivo que JÁ está na pasta do Google Drive para Desktop, sem novo upload. Só funciona com Google Drive.",
     {
-      path_or_filename: z.string().describe("Caminho no G: ou nome do arquivo na pasta de assets (ex: 'G:/Meu Drive/Firecast Assets/token.png' ou 'token.png')."),
+      path_or_filename: z
+        .string()
+        .describe("Caminho completo no Drive (ex: 'G:/Meu Drive/Firecast Assets/token.png') ou só o nome do arquivo dentro da pasta de assets (ex: 'token.png')."),
     },
-    async (args) => {
-      const res = await handleGetMediaUrl({
-        pathOrFilename: args.path_or_filename,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(res, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => jsonResult(await handleGetMediaUrl({ pathOrFilename: args.path_or_filename }))
   );
 
   server.tool(
     "list_media_files",
-    "Lista os arquivos armazenados na pasta de assets do Google Drive com seus links gerados.",
+    "Lista os arquivos da pasta de assets no Google Drive (configurável em configure_storage) com suas URLs prontas. Só Google Drive.",
     {
-      subfolder: z.string().optional().describe("Subpasta opcional."),
-      limit: z.number().optional().describe("Limite de itens (padrão: 50)."),
+      subfolder: z.string().optional().describe("Lista só esta subpasta da pasta de assets."),
+      limit: z.number().int().optional().describe("Máximo de arquivos. Padrão: 50."),
     },
-    async (args) => {
-      const res = await handleListMediaFiles({
-        subfolder: args.subfolder,
-        limit: args.limit,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(res, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) => jsonResult(await handleListMediaFiles({ subfolder: args.subfolder, limit: args.limit }))
   );
 
   server.tool(
     "send_media_to_chat",
-    "Envia uma imagem ou arquivo diretamente para o chat de uma mesa no Firecast, com suporte a legenda e personificação de personagem.",
+    "Mostra uma imagem (ou link de arquivo) no chat da mesa, com legenda opcional. Fonte da mídia, em ordem de prioridade: media_url (já hospedada) → file_path/filename de um arquivo que já está no Drive (reaproveita o link) → upload de file_path/content_base64. Identidade: as_character_id (personagem do Character Manager) ou npc_name; sem nenhum, envia como você.",
     {
-      room_id: z.number().describe("ID da mesa no Firecast."),
-      chat_id: z.string().optional().describe("ID do chat (opcional, padrão chat principal)."),
-      file_path: z.string().optional().describe("Caminho do arquivo local para fazer upload e enviar."),
-      content_base64: z.string().optional().describe("Conteúdo base64 do arquivo."),
-      filename: z.string().optional().describe("Nome do arquivo."),
-      media_url: z.string().optional().describe("URL da mídia se já tiver sido feito upload anteriormente."),
-      caption: z.string().optional().describe("Legenda ou mensagem que acompanha a imagem/arquivo."),
-      as_character_id: z.string().optional().describe("ID do personagem no gerenciador MCP para enviar como ele."),
-      npc_name: z.string().optional().describe("Nome de NPC genérico caso não use personagem salvo."),
-      provider: z.enum(["auto", "gdrive", "firedrive"]).optional().describe("Provedor de upload ('auto', 'gdrive', 'firedrive')."),
-      subfolder: z.string().optional().describe("Subpasta no storage."),
+      room_id: roomIdSchema,
+      chat_id: chatIdSchema,
+      media_url: z.string().optional().describe("URL de mídia já hospedada. Se informada, nada é enviado para upload."),
+      file_path: z.string().optional().describe("Caminho absoluto do arquivo local a enviar (ou de um arquivo já dentro do Drive)."),
+      content_base64: z.string().optional().describe("Conteúdo em Base64 (exige filename)."),
+      filename: z.string().optional().describe("Nome do arquivo (com extensão). Sozinho, procura um arquivo com esse nome na pasta de assets do Drive."),
+      caption: z.string().optional().describe("Texto exibido na linha acima da imagem."),
+      as_character_id: z.string().optional().describe("Envia como este personagem do Character Manager (id, code ou nome), com avatar e cor dele."),
+      npc_name: z.string().optional().describe("Envia como um NPC avulso com este nome. Ignorado se as_character_id for informado."),
+      provider: providerSchema,
+      subfolder: z.string().optional().describe("Subpasta de destino no Drive, caso haja upload."),
     },
-    async (args) => {
-      const res = await handleSendMediaToChat({
-        roomId: args.room_id,
-        chatId: args.chat_id,
-        filePath: args.file_path,
-        contentBase64: args.content_base64,
-        filename: args.filename,
-        mediaUrl: args.media_url,
-        caption: args.caption,
-        asCharacterId: args.as_character_id,
-        npcName: args.npc_name,
-        provider: args.provider,
-        subfolder: args.subfolder,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(res, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) =>
+      jsonResult(
+        await handleSendMediaToChat({
+          roomId: args.room_id,
+          chatId: args.chat_id,
+          filePath: args.file_path,
+          contentBase64: args.content_base64,
+          filename: args.filename,
+          mediaUrl: args.media_url,
+          caption: args.caption,
+          asCharacterId: args.as_character_id,
+          npcName: args.npc_name,
+          provider: args.provider,
+          subfolder: args.subfolder,
+        })
+      )
   );
 
   server.tool(
     "configure_storage",
-    "Consulta ou altera a configuração do provedor de armazenamento (Google Drive vs FireDrive) e pasta de assets.",
+    "Sem parâmetros: mostra a configuração de armazenamento atual e se o Google Drive para Desktop foi detectado. Com parâmetros: altera o padrão (gravado em config.json).",
     {
-      provider: z.enum(["auto", "gdrive", "firedrive"]).optional().describe("Novo provedor padrão."),
-      gdrive_assets_path: z.string().optional().describe("Novo caminho base no Google Drive (ex: 'G:/Meu Drive/Firecast Assets')."),
+      provider: z.enum(["auto", "gdrive", "firedrive"]).optional().describe("Novo provedor padrão para uploads."),
+      gdrive_assets_path: z.string().optional().describe("Nova pasta base de assets no Drive (ex: 'G:/Meu Drive/Firecast Assets')."),
     },
-    async (args) => {
-      const res = await handleConfigureStorage({
-        provider: args.provider,
-        gdriveAssetsPath: args.gdrive_assets_path,
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(res, null, 2),
-          },
-        ],
-      };
-    }
+    async (args) =>
+      jsonResult(
+        await handleConfigureStorage({
+          provider: args.provider,
+          gdriveAssetsPath: args.gdrive_assets_path,
+        })
+      )
   );
 }

@@ -47,6 +47,8 @@ import {
   handleConfigureStorage,
 } from "./tools/media.js";
 import { sheetSyncTools } from "./tools/sheet_sync.js";
+import { collectTools, toolInputJsonSchema } from "./tools/registry.js";
+import { z } from "zod";
 import { getSheetFromDb, listSheetsFromDb } from "./db.js";
 import { sendCommand } from "./bridge.js";
 
@@ -195,303 +197,15 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         });
       }
 
-      // 2. Lista de Tools MCP
+      // 2. Lista de Tools MCP (gerada das mesmas definições registradas no modo stdio)
       if (req.method === "GET" && pathname === "/tools") {
         return sendJson(200, {
-          tools: [
-            {
-              name: "list_rooms",
-              description: "Lista todas as mesas abertas no Firecast. Usa cache local quando disponível.",
-              inputSchema: { type: "object", properties: { fresh: { type: "boolean" } } },
-            },
-            {
-              name: "get_room",
-              description: "Retorna os detalhes de uma mesa específica pelo seu ID interno.",
-              inputSchema: {
-                type: "object",
-                properties: { id: { type: "integer", description: "codigoInterno da mesa" } },
-                required: ["id"],
-              },
-            },
-            {
-              name: "list_players",
-              description: "Lista os jogadores presentes em uma mesa específica.",
-              inputSchema: {
-                type: "object",
-                properties: { room_id: { type: "integer", description: "codigoInterno da mesa" } },
-                required: ["room_id"],
-              },
-            },
-            {
-              name: "list_chats",
-              description: "Lista todos os chats disponíveis em uma mesa (principal, PVTs, grupos).",
-              inputSchema: {
-                type: "object",
-                properties: { room_id: { type: "integer", description: "codigoInterno da mesa" } },
-                required: ["room_id"],
-              },
-            },
-            {
-              name: "get_chat_messages",
-              description: "Recupera o histórico recente de mensagens de um chat da mesa.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  chat_id: { type: "string" },
-                  limit: { type: "integer" },
-                  fresh: { type: "boolean" },
-                },
-                required: ["room_id"],
-              },
-            },
-            {
-              name: "send_chat_message",
-              description: "Envia uma mensagem para o chat da mesa no Firecast.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  message: { type: "string" },
-                  chat_id: { type: "string" },
-                  type: { type: "string", enum: ["standard", "narrator", "npc", "action", "laugh"] },
-                  npc_name: { type: "string" },
-                },
-                required: ["room_id", "message"],
-              },
-            },
-            {
-              name: "roll_dice",
-              description: "Executa uma rolagem de dados oficial dentro do chat da mesa no Firecast.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  expression: { type: "string" },
-                  chat_id: { type: "string" },
-                  message: { type: "string" },
-                },
-                required: ["room_id", "expression"],
-              },
-            },
-            {
-              name: "list_library",
-              description: "Lista itens ou árvore da Biblioteca de uma mesa.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  parent_codigo: { type: "integer" },
-                  recursive: { type: "boolean" },
-                  max_depth: { type: "integer" },
-                },
-                required: ["room_id"],
-              },
-            },
-            {
-              name: "get_library_item",
-              description: "Obtém detalhes de um item específico da biblioteca (pasta ou personagem).",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                },
-                required: ["room_id", "codigo_interno"],
-              },
-            },
-            {
-              name: "get_sheet_ndb",
-              description: "Abre o Node Database (NDB) de uma ficha de personagem e retorna seus dados.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  path: { type: "string" },
-                },
-                required: ["room_id", "codigo_interno"],
-              },
-            },
-            {
-              name: "edit_sheet_ndb",
-              description: "Modifica atributos ou sub-nós no NDB de uma ficha (exclusivo mesa tttttaaaaa).",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  operations: { type: "array" },
-                },
-                required: ["room_id", "codigo_interno", "operations"],
-              },
-            },
-            {
-              name: "open_dock_ndb",
-              description: "Abre um Node Database de janela acoplável (Dock NDB) ou de usuário.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  name: { type: "string" },
-                  is_user: { type: "boolean" },
-                },
-                required: ["room_id", "name"],
-              },
-            },
-            {
-              name: "edit_dock_ndb",
-              description: "Modifica atributos ou sub-nós em um Dock NDB (exclusivo mesa tttttaaaaa).",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  name: { type: "string" },
-                  operations: { type: "array" },
-                  is_user: { type: "boolean" },
-                },
-                required: ["room_id", "name", "operations"],
-              },
-            },
-            {
-              name: "manage_library_item",
-              description: "Cria pastas/personagens, atualiza, move ou deleta na biblioteca (exclusivo mesa tttttaaaaa).",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  action: { type: "string", enum: ["create_dir", "create_char", "update", "delete", "move"] },
-                  parent_codigo: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  name: { type: "string" },
-                },
-                required: ["room_id", "action"],
-              },
-            },
-            {
-              name: "manage_room",
-              description: "Lê detalhes ou altera configurações administrativas da mesa (exclusivo mesa tttttaaaaa).",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  action: { type: "string", enum: ["get_details", "set_moderada"] },
-                  moderada: { type: "boolean" },
-                },
-                required: ["room_id", "action"],
-              },
-            },
-            {
-              name: "list_data_types",
-              description: "Lista todos os tipos de dados / modelos de fichas (dataTypes) instalados no Firecast.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  form_type: { type: "string" },
-                  query: { type: "string" },
-                },
-              },
-            },
-            {
-              name: "list_installed_plugins",
-              description: "Lista todos os plugins SDK3 instalados no cliente Firecast.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  query: { type: "string" },
-                },
-              },
-            },
-            {
-              name: "get_sheet_template",
-              description: "Inspeciona e extrai o schema completo de um modelo de ficha (RPK/LFM) instalado no Firecast pelo dataType ou nome.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  data_type: { type: "string" },
-                },
-                required: ["data_type"],
-              },
-            },
-            {
-              name: "create_character_sheet",
-              description: "Cria um novo personagem na biblioteca e inicializa toda a estrutura de nós (NDB) do template RPK.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  name: { type: "string" },
-                  data_type: { type: "string" },
-                  parent_codigo: { type: "integer" },
-                  auto_structure: { type: "boolean" },
-                  initial_data: { type: "object" },
-                },
-                required: ["room_id", "name", "data_type"],
-              },
-            },
-            {
-              name: "get_character_sheet",
-              description: "Obtém dados em tempo real da ficha de personagem (NDB). Lê instantaneamente do SQLite (via NodeObserver) ou direto do Firecast com fresh=true.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  fresh: { type: "boolean" },
-                },
-                required: ["room_id", "codigo_interno"],
-              },
-            },
-            {
-              name: "update_character_sheet",
-              description: "Modifica campos ou sub-árvores na ficha de personagem (NDB) com cancelamento de eco e sincronização bidirecional.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  changes: { type: "object", description: "Dicionário de alterações (suporta ponto: 'atributos.forca')" },
-                },
-                required: ["room_id", "codigo_interno", "changes"],
-              },
-            },
-            {
-              name: "list_synced_sheets",
-              description: "Lista todas as fichas sincronizadas e observadas na mesa, indicando se pertencem a jogadores online ou abas abertas.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  fresh: { type: "boolean" },
-                },
-              },
-            },
-            {
-              name: "sync_character_sheet",
-              description: "Inicia a sincronização contínua de uma ficha de personagem específica com observador em tempo real.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                  source: { type: "string" },
-                },
-                required: ["room_id", "codigo_interno"],
-              },
-            },
-            {
-              name: "open_character_sheet",
-              description: "Abre a ficha de personagem em uma aba visual na interface do Firecast e marca para sincronização ativa.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  room_id: { type: "integer" },
-                  codigo_interno: { type: "integer" },
-                },
-                required: ["room_id", "codigo_interno"],
-              },
-            },
-          ],
+          tools: collectTools().map((t) => ({
+            name: t.name,
+            group: t.group,
+            description: t.description,
+            inputSchema: toolInputJsonSchema(t.shape),
+          })),
         });
       }
 
@@ -919,6 +633,20 @@ export function startHttpServer(options: HttpServerOptions): http.Server {
         const syncTool = sheetSyncTools.find((t) => t.name === toolName);
         if (syncTool) {
           const result = await syncTool.handler(args);
+          return sendJson(200, { success: true, tool: toolName, result });
+        }
+
+        // Fallback: qualquer tool registrada sem ramo dedicado acima, com validação zod
+        const registered = collectTools().find((t) => t.name === toolName);
+        if (registered) {
+          const parsed = z.object(registered.shape).safeParse(args);
+          if (!parsed.success) {
+            return sendJson(400, { success: false, error: parsed.error.message });
+          }
+          const out = await registered.handler(parsed.data);
+          const text = out.content?.[0]?.text ?? "null";
+          let result: unknown = text;
+          try { result = JSON.parse(text); } catch {}
           return sendJson(200, { success: true, tool: toolName, result });
         }
 

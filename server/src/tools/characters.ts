@@ -20,6 +20,7 @@ import {
   type VisibilityParam,
 } from "./chat.js";
 import { handleCreateCharacterSheet } from "./ndb.js";
+import { jsonResult, roomIdSchema, chatIdSchema, characterRefSchema } from "./common.js";
 
 const FIRECAST_COLORS: Record<string, string> = {
   "0": "#000000",
@@ -185,7 +186,14 @@ export async function handleDeleteCharacter(
   idOrCode: string,
   roomId?: number
 ): Promise<{ success: boolean; error?: string }> {
-  const deleted = deleteCharacter(idOrCode, roomId);
+  // Exclusão exige id ou code exatos: findCharacter faz busca parcial por nome,
+  // o que poderia apagar o personagem errado.
+  const clean = idOrCode.trim();
+  const target = findCharacter(clean, roomId);
+  if (!target || (target.id !== clean && target.code !== clean)) {
+    return { success: false, error: `Character with id or code '${idOrCode}' not found (delete requires the exact id or code).` };
+  }
+  const deleted = deleteCharacter(target.id, roomId);
   if (!deleted) {
     return { success: false, error: `Character '${idOrCode}' not found.` };
   }
@@ -497,238 +505,191 @@ export async function handleImportExternalNpcs(args: {
 // --- Register MCP Tools ---
 
 const CharacterImageSchema = z.object({
-  url: z.string().describe("URL da imagem"),
-  label: z.string().optional().describe("Rótulo amigável (ex: 'Combate', 'Furioso', 'Token', 'Retrato')"),
-  tag: z.string().optional().describe("Tag de busca (ex: 'battle', 'portrait', 'token')"),
+  url: z.string().describe("URL http(s) da imagem."),
+  label: z.string().optional().describe("Rótulo para escolher a imagem depois via image_label (ex: 'Combate', 'Furioso', 'Retrato')."),
+  tag: z.string().optional().describe("Tag para escolher a imagem depois via image_tag (ex: 'battle', 'portrait', 'token')."),
 });
 
+const CHARACTER_MANAGER_NOTE =
+  "O Character Manager é um banco local do MCP (SQLite) para NPCs/personagens com identidade visual e notas de interpretação; NÃO é a Biblioteca do Firecast e não aparece para os jogadores.";
+
+/** Campos editáveis de um personagem do Character Manager (compartilhados por create e update). */
+function characterFieldsShape() {
+  return {
+    room_id: z.number().int().optional().describe("Mesa à qual o personagem pertence (campo `id` de list_rooms). Omitido = personagem global, usável em qualquer mesa."),
+    code: z.string().optional().describe("Código curto único usado como atalho para referenciar o personagem nas outras tools (ex: 'akn', 'taverneiro')."),
+    title: z.string().optional().describe("Título/epíteto (ex: 'Guardiã do Abismo'). Informativo."),
+    avatar_url: z.string().optional().describe("URL http(s) do avatar padrão exibido no chat."),
+    images: z
+      .array(z.union([z.string(), CharacterImageSchema]))
+      .optional()
+      .describe("Galeria de avatares alternativos: URLs simples ou { url, label, tag }. Escolha uma no envio com image_label/image_tag."),
+    gender: z.enum(["masculine", "feminine", "neuter", "undefined"]).optional().describe("Gênero gramatical do personagem."),
+    color: z.string().optional().describe("Cor do nome e do texto no chat: '#RRGGBB' ou índice de cor do Firecast '0'–'15' (ex: '4' = vermelho)."),
+    bkg_color: z.string().optional().describe("Cor de fundo do texto ('#RRGGBB')."),
+    bold: z.boolean().optional().describe("Texto das falas em negrito."),
+    italic: z.boolean().optional().describe("Texto das falas em itálico."),
+    underline: z.boolean().optional().describe("Texto das falas sublinhado."),
+    strikeout: z.boolean().optional().describe("Texto das falas tachado."),
+    talemark_options: z
+      .record(z.string(), z.any())
+      .optional()
+      .describe("Avançado: sobrescreve as talemarkOptions geradas (ex: { parseSmileys: false, defaultTextStyle: {...} })."),
+    voice: z.string().optional().describe("Voz de TTS associada (informativo)."),
+    personality: z.string().optional().describe("Personalidade/diretrizes de interpretação, para o modelo consultar antes de falar como o personagem."),
+    speech_style: z.string().optional().describe("Jeito de falar, bordões, sotaque."),
+    appearance: z.string().optional().describe("Descrição física."),
+    background: z.string().optional().describe("História/origem."),
+    notes: z.string().optional().describe("Notas e segredos do mestre."),
+    tags: z.array(z.string()).optional().describe("Tags para filtrar em list_characters (ex: ['npc', 'boss', 'mercador'])."),
+    sheet_codigo: z.number().int().optional().describe("codigoInterno da ficha vinculada na Biblioteca do Firecast (ou use link_character_sheet)."),
+    sheet_data_type: z.string().optional().describe("dataType do modelo da ficha vinculada (ex: 'br.com.rrpg.DnD5_S3')."),
+    bars: z.record(z.string(), z.any()).optional().describe("Barras resumidas, informativo (ex: { bar0: { val: 20, max: 20, label: 'PV' } })."),
+    stats: z.record(z.string(), z.any()).optional().describe("Atributos resumidos, informativo (ex: { forca: 18, ca: 16 })."),
+  };
+}
+
+const appearanceOverrideShape = {
+  image_label: z.string().optional().describe("Usa como avatar a imagem da galeria com este `label` (sem diferenciar maiúsculas)."),
+  image_tag: z.string().optional().describe("Usa como avatar a imagem da galeria com esta `tag`. Ignorado se image_label for informado."),
+  avatar_override: z.string().optional().describe("URL de avatar só para este envio; tem prioridade sobre image_label/image_tag."),
+  raw_name: z.boolean().optional().describe("true = envia o nome sem o prefixo de cor '[§K...]'. Padrão: false."),
+};
+
 export function registerCharacterTools(server: McpServer): void {
-  // 1. create_character
   server.tool(
     "create_character",
-    "Cria um novo personagem ou NPC completo no banco de dados do Character Manager, com avatar, galeria de imagens, estilização de interpretação (Talemark/cores), prompt de personalidade, notas de mestre e ficha vinculada.",
+    "Cadastra (ou sobrescreve) um personagem/NPC no Character Manager com identidade visual (avatar, galeria, cor e estilo do texto) e notas de interpretação, para depois falar/rolar como ele com impersonate_character e character_roll. " +
+      CHARACTER_MANAGER_NOTE +
+      " O `id` é gerado a partir de name/code; criar de novo com o mesmo name/code SUBSTITUI o registro. Retorna { character }.",
     {
-      name: z.string().describe("Nome do personagem"),
-      room_id: z.number().optional().describe("ID da mesa à qual o personagem pertence (omitir para personagem global/multiverso)"),
-      code: z.string().optional().describe("Código curto / prefixo para atalhos rápidos (ex: 'neferet', 'akn', 'ton')"),
-      title: z.string().optional().describe("Título / epíteto / arquétipo (ex: 'Guardiã do Abismo')"),
-      avatar_url: z.string().optional().describe("URL da imagem de perfil principal"),
-      images: z.array(z.union([z.string(), CharacterImageSchema])).optional().describe("Galeria de imagens adicionais / retratos alternativos / tokens"),
-      gender: z.enum(["masculine", "feminine", "neuter", "undefined"]).optional().describe("Gênero do personagem"),
-      color: z.string().optional().describe("Cor principal do texto e do nome (§K#RRGGBB ou índice do Firecast)"),
-      bkg_color: z.string().optional().describe("Cor de fundo do texto (opcional)"),
-      bold: z.boolean().optional().describe("Texto padrão em negrito"),
-      italic: z.boolean().optional().describe("Texto padrão em itálico"),
-      underline: z.boolean().optional().describe("Texto padrão sublinhado"),
-      strikeout: z.boolean().optional().describe("Texto padrão tachado"),
-      talemark_options: z.record(z.string(), z.any()).optional().describe("Opções detalhadas de Talemark customizadas"),
-      voice: z.string().optional().describe("Voz de TTS associada ao personagem"),
-      personality: z.string().optional().describe("Prompt / personalidade / diretrizes de interpretação e comportamento"),
-      speech_style: z.string().optional().describe("Modo de falar, maneirismos, bordões, sotaque"),
-      appearance: z.string().optional().describe("Descrição física e visual"),
-      background: z.string().optional().describe("História e origens do personagem"),
-      notes: z.string().optional().describe("Anotações gerais e segredos do mestre"),
-      tags: z.array(z.string()).optional().describe("Tags de classificação (ex: ['npc', 'boss', 'aliado', 'mercador'])"),
-      sheet_codigo: z.number().optional().describe("Código interno da ficha de personagem na biblioteca do Firecast"),
-      sheet_data_type: z.string().optional().describe("DataType do modelo da ficha (ex: 'br.com.rrpg.DnD5_S3')"),
-      bars: z.record(z.string(), z.any()).optional().describe("Barras rápidas (ex: { bar0: { val: 20, max: 20, label: 'PV' } })"),
-      stats: z.record(z.string(), z.any()).optional().describe("Estatísticas e atributos resumidos (ex: { forca: 18, ca: 16 })"),
+      name: z.string().describe("Nome exibido no chat."),
+      ...characterFieldsShape(),
     },
-    async (args) => {
-      const result = await handleCreateCharacter(args as any);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async (args) => jsonResult(await handleCreateCharacter(args as any))
   );
 
-  // 2. update_character
   server.tool(
     "update_character",
-    "Atualiza campos de um personagem existente no Character Manager.",
+    "Atualiza um personagem do Character Manager. Só os campos enviados mudam; campos de lista/objeto (images, tags, bars, stats, talemark_options) são SUBSTITUÍDOS por inteiro, não mesclados — leia com get_character antes se quiser acrescentar.",
     {
-      character: z.string().describe("ID, código ou nome do personagem a ser atualizado"),
-      room_id: z.number().optional().describe("ID da mesa para desambiguação"),
-      name: z.string().optional().describe("Novo nome do personagem"),
-      code: z.string().optional().describe("Novo código curto"),
-      title: z.string().optional().describe("Novo título"),
-      avatar_url: z.string().optional().describe("Nova URL de avatar"),
-      images: z.array(z.union([z.string(), CharacterImageSchema])).optional().describe("Nova galeria de imagens"),
-      gender: z.enum(["masculine", "feminine", "neuter", "undefined"]).optional().describe("Gênero"),
-      color: z.string().optional().describe("Cor do texto e nome"),
-      bkg_color: z.string().optional().describe("Cor de fundo"),
-      bold: z.boolean().optional().describe("Negrito"),
-      italic: z.boolean().optional().describe("Itálico"),
-      underline: z.boolean().optional().describe("Sublinhado"),
-      strikeout: z.boolean().optional().describe("Tachado"),
-      talemark_options: z.record(z.string(), z.any()).optional().describe("Talemark options"),
-      voice: z.string().optional().describe("Voz de TTS"),
-      personality: z.string().optional().describe("Personalidade / prompt"),
-      speech_style: z.string().optional().describe("Estilo de fala"),
-      appearance: z.string().optional().describe("Descrição física"),
-      background: z.string().optional().describe("História"),
-      notes: z.string().optional().describe("Anotações"),
-      tags: z.array(z.string()).optional().describe("Tags"),
-      sheet_codigo: z.number().optional().describe("Código interno da ficha na biblioteca"),
-      sheet_data_type: z.string().optional().describe("DataType da ficha"),
-      bars: z.record(z.string(), z.any()).optional().describe("Barras rápidas"),
-      stats: z.record(z.string(), z.any()).optional().describe("Atributos resumidos"),
+      character: characterRefSchema,
+      name: z.string().optional().describe("Novo nome."),
+      ...characterFieldsShape(),
+      room_id: z.number().int().optional().describe("Mesa para desambiguar a busca do personagem (não move o personagem de mesa)."),
     },
-    async ({ character, room_id, ...updates }) => {
-      const result = await handleUpdateCharacter(character, updates as any, room_id);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async ({ character, room_id, ...updates }) =>
+      jsonResult(await handleUpdateCharacter(character, updates as any, room_id))
   );
 
-  // 3. get_character
   server.tool(
     "get_character",
-    "Recupera os detalhes completos de um personagem no Character Manager por ID, código curto ou nome.",
+    "Retorna todos os campos de um personagem do Character Manager (identidade, galeria, personalidade, notas, ficha vinculada). Leia antes de interpretar o personagem. Retorna { found, character }.",
     {
-      character: z.string().describe("ID, código ou nome do personagem"),
-      room_id: z.number().optional().describe("ID da mesa para priorização"),
+      character: characterRefSchema,
+      room_id: z.number().int().optional().describe("Mesa para priorizar na busca quando há nomes/códigos repetidos."),
     },
-    async ({ character, room_id }) => {
-      const result = await handleGetCharacter(character, room_id);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async ({ character, room_id }) => jsonResult(await handleGetCharacter(character, room_id))
   );
 
-  // 4. list_characters
   server.tool(
     "list_characters",
-    "Lista personagens cadastrados no Character Manager com filtros por mesa, tags e busca textual.",
+    "Lista personagens do Character Manager, com filtros. Retorna { characters[], total }. " + CHARACTER_MANAGER_NOTE,
     {
-      room_id: z.number().optional().describe("Filtrar por ID da mesa (se omitido, lista todos)"),
-      include_global: z.boolean().optional().describe("Se true (padrão), inclui personagens globais (sem mesa) junto com os da mesa"),
-      tag: z.string().optional().describe("Filtrar por tag específica (ex: 'npc', 'boss')"),
-      search: z.string().optional().describe("Termo de busca no nome, código, título ou tags"),
-      limit: z.number().optional().describe("Limite de resultados (padrão: 50)"),
-      offset: z.number().optional().describe("Deslocamento para paginação (padrão: 0)"),
+      room_id: z.number().int().optional().describe("Só personagens desta mesa (+ globais, ver include_global). Omitido = todos."),
+      include_global: z.boolean().optional().describe("Com room_id: true (padrão) inclui também os personagens globais (sem mesa)."),
+      tag: z.string().optional().describe("Só personagens com esta tag (ex: 'npc')."),
+      search: z.string().optional().describe("Busca parcial em nome, código, título e tags."),
+      limit: z.number().int().optional().describe("Máximo de resultados. Padrão: 50."),
+      offset: z.number().int().optional().describe("Pula N resultados (paginação). Padrão: 0."),
     },
-    async ({ room_id, include_global, tag, search, limit, offset }) => {
-      const result = await handleListCharacters({
-        roomId: room_id,
-        includeGlobal: include_global ?? true,
-        tag,
-        search,
-        limit,
-        offset,
-      });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async ({ room_id, include_global, tag, search, limit, offset }) =>
+      jsonResult(
+        await handleListCharacters({
+          roomId: room_id,
+          includeGlobal: include_global ?? true,
+          tag,
+          search,
+          limit,
+          offset,
+        })
+      )
   );
 
-  // 5. delete_character
   server.tool(
     "delete_character",
-    "Remove um personagem do Character Manager por ID ou código.",
+    "Remove um personagem do Character Manager (irreversível). Não apaga a ficha vinculada na Biblioteca do Firecast.",
     {
-      character: z.string().describe("ID ou código do personagem"),
-      room_id: z.number().optional().describe("ID da mesa para desambiguação"),
+      character: z.string().describe("`id` ou `code` do personagem (nome não é aceito aqui, para evitar apagar o errado)."),
+      room_id: z.number().int().optional().describe("Mesa para desambiguar códigos repetidos."),
     },
-    async ({ character, room_id }) => {
-      const result = await handleDeleteCharacter(character, room_id);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async ({ character, room_id }) => jsonResult(await handleDeleteCharacter(character, room_id))
   );
 
-  // 6. impersonate_character
   server.tool(
     "impersonate_character",
-    "Fala ou atua no chat oficial da mesa personificando um personagem do Character Manager, aplicando automaticamente seu avatar, nome colorido e estilo de texto Talemark.",
+    "Publica uma fala/ação no chat da mesa COMO um personagem do Character Manager, aplicando automaticamente nome colorido, avatar e estilo de texto dele. Prefira esta tool a send_chat_message para personagens cadastrados.",
     {
-      character: z.string().describe("ID, código ou nome do personagem cadastrado"),
-      message: z.string().describe("Mensagem ou ação a ser dita pelo personagem"),
-      room_id: z.number().optional().describe("ID da mesa (obrigatório se o personagem for global)"),
-      chat_id: z.string().optional().describe("Identificador do chat ('main', 'active', etc.). Padrão: 'main'"),
-      type: z.enum(["standard", "narrator", "npc", "action", "laugh"]).optional().describe("Tipo de mensagem (padrão: 'npc')"),
-      image_label: z.string().optional().describe("Rótulo da imagem a usar da galeria do personagem (ex: 'Combate', 'Furioso')"),
-      image_tag: z.string().optional().describe("Tag da imagem a usar da galeria (ex: 'battle', 'token')"),
-      avatar_override: z.string().optional().describe("URL explícita de avatar para sobrescrever neste envio"),
-      raw_name: z.boolean().optional().describe("Se true, envia o nome sem a tag de cor [§K...]"),
-      as_whisper_to: z.string().optional().describe("Login de um jogador para enviar como sussurro secreto"),
+      character: characterRefSchema,
+      message: z.string().describe("Fala ou ação. Texto entre *asteriscos* sai como ação; aceita marcação Talemark."),
+      room_id: z.number().int().optional().describe("Mesa de destino. Obrigatório se o personagem for global (sem room_id próprio); senão usa a mesa do personagem."),
+      chat_id: chatIdSchema,
+      type: z.enum(["standard", "narrator", "npc", "action", "laugh"]).optional().describe("Tipo de mensagem. Padrão: 'npc' (fala do personagem). 'action' = ação em terceira pessoa."),
+      ...appearanceOverrideShape,
+      as_whisper_to: z
+        .string()
+        .optional()
+        .describe("Sussurro. Número (campo `id` de list_players) = mensagem visível só para esse jogador (seguro). Texto (login) = envia no chat 'pvt:<login>', que precisa já estar aberto; se não estiver, a mensagem cai no chat PÚBLICO. Prefira o id numérico."),
     },
-    async (args) => {
-      const result = await handleImpersonateCharacter(args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async (args) => jsonResult(await handleImpersonateCharacter(args))
   );
 
-  // 7. character_roll
   server.tool(
     "character_roll",
-    "Rola dados no chat oficial da mesa em nome de um personagem do Character Manager, exibindo seu avatar e identidade.",
+    "Faz uma rolagem oficial de dados no chat em nome de um personagem do Character Manager (com nome e avatar dele). Retorna { total, asString, roll }.",
     {
-      character: z.string().describe("ID, código ou nome do personagem"),
-      expression: z.string().describe("Expressão de rolagem (ex: '1d20+5', '3d6+2')"),
-      room_id: z.number().optional().describe("ID da mesa"),
-      message: z.string().optional().describe("Descrição ou motivo da rolagem (ex: 'Ataque com Espada Vorpal')"),
-      chat_id: z.string().optional().describe("Identificador do chat (padrão: 'main')"),
-      image_label: z.string().optional().describe("Rótulo da imagem da galeria a usar"),
-      image_tag: z.string().optional().describe("Tag da imagem da galeria a usar"),
-      avatar_override: z.string().optional().describe("URL explícita de avatar"),
-      raw_name: z.boolean().optional().describe("Se true, envia o nome sem formatação de cor"),
+      character: characterRefSchema,
+      expression: z.string().describe("Fórmula no formato do Firecast: '1d20+5', '3d6+2', '4dF'."),
+      room_id: z.number().int().optional().describe("Mesa de destino. Obrigatório se o personagem for global."),
+      message: z.string().optional().describe("Motivo exibido junto à rolagem (ex: 'Ataque com Espada Vorpal')."),
+      chat_id: chatIdSchema,
+      ...appearanceOverrideShape,
     },
-    async (args) => {
-      const result = await handleCharacterRoll(args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async (args) => jsonResult(await handleCharacterRoll(args))
   );
 
-  // 8. link_character_sheet
   server.tool(
     "link_character_sheet",
-    "Vincula um personagem do Character Manager a uma ficha na biblioteca do Firecast, ou cria automaticamente uma nova ficha para ele.",
+    "Vincula um personagem do Character Manager a uma ficha da Biblioteca do Firecast (grava sheet_codigo no personagem). Informe sheet_codigo de uma ficha existente, ou auto_create=true para criar uma nova ficha com o nome do personagem (usa create_character_sheet; sujeito à proteção de mesa de teste/mestre).",
     {
-      character: z.string().describe("ID, código ou nome do personagem"),
-      room_id: z.number().describe("ID da mesa"),
-      sheet_codigo: z.number().optional().describe("Código interno da ficha existente na biblioteca (se já existir)"),
-      sheet_data_type: z.string().optional().describe("Modelo da ficha (ex: 'br.com.rrpg.FICHA_BASICA_V3', 'Ambesek.Nefertyne.FichaMultiaba')"),
-      auto_create: z.boolean().optional().describe("Se true e sheet_codigo não for fornecido, cria uma nova ficha na biblioteca automaticamente"),
-      parent_folder_codigo: z.number().optional().describe("Pasta da biblioteca onde criar a nova ficha"),
+      character: characterRefSchema,
+      room_id: roomIdSchema,
+      sheet_codigo: z.number().int().optional().describe("codigoInterno de uma ficha existente (list_library). Se omitido, usa o já vinculado ou cria (auto_create)."),
+      sheet_data_type: z.string().optional().describe("Modelo da ficha a criar com auto_create. Padrão: 'br.com.rrpg.FICHA_BASICA_V3'."),
+      auto_create: z.boolean().optional().describe("true = cria uma ficha nova se não houver sheet_codigo. Padrão: false."),
+      parent_folder_codigo: z.number().int().optional().describe("codigoInterno da pasta onde criar a ficha. Omitido = raiz."),
     },
-    async ({ character, room_id, sheet_codigo, sheet_data_type, auto_create, parent_folder_codigo }) => {
-      const result = await handleLinkCharacterSheet({
-        character,
-        roomId: room_id,
-        sheetCodigo: sheet_codigo,
-        sheetDataType: sheet_data_type,
-        autoCreate: auto_create,
-        parentFolderCodigo: parent_folder_codigo,
-      });
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async ({ character, room_id, sheet_codigo, sheet_data_type, auto_create, parent_folder_codigo }) =>
+      jsonResult(
+        await handleLinkCharacterSheet({
+          character,
+          roomId: room_id,
+          sheetCodigo: sheet_codigo,
+          sheetDataType: sheet_data_type,
+          autoCreate: auto_create,
+          parentFolderCodigo: parent_folder_codigo,
+        })
+      )
   );
 
-  // 9. import_external_npcs
   server.tool(
     "import_external_npcs",
-    "Importa NPCs existentes do NPC Saver (npcs.txt) e do NPC Interpreter (/rooms/.../npcs) diretamente para o banco de dados do Character Manager.",
+    "Importa para o Character Manager os NPCs salvos pelos plugins NPC Saver (npcs.txt) e NPC Interpreter (pasta rooms/<mesa>/npcs) instalados neste computador. Lê arquivos locais; não precisa do Firecast aberto. Retorna { imported, skipped, details[] }.",
     {
-      source: z.enum(["all", "npcsaver", "npc_interpreter"]).optional().describe("Fonte de importação (padrão: 'all')"),
-      room_id: z.number().optional().describe("Filtrar importação apenas para uma mesa específica"),
-      overwrite: z.boolean().optional().describe("Se true, sobrescreve personagens que já existam no banco com o mesmo código/id"),
+      source: z.enum(["all", "npcsaver", "npc_interpreter"]).optional().describe("Qual plugin importar. Padrão: 'all'."),
+      room_id: z.number().int().optional().describe("Só importa NPCs desta mesa. Omitido = todas."),
+      overwrite: z.boolean().optional().describe("true = sobrescreve NPCs já importados; false (padrão) = pula os existentes."),
     },
-    async (args) => {
-      const result = await handleImportExternalNpcs(args);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-      };
-    }
+    async (args) => jsonResult(await handleImportExternalNpcs(args))
   );
 }

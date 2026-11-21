@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getAllRooms, getRoomById, upsertRoom } from "../db.js";
 import { sendCommand } from "../bridge.js";
+import { jsonResult, freshSchema, roomIdSchema, ROOM_ID_DESC } from "./common.js";
 
 export async function handleListRooms(fresh = false): Promise<unknown> {
   if (!fresh) {
@@ -54,58 +55,30 @@ export async function handleListPlayers(roomId: number, fresh = false): Promise<
 }
 
 export function registerRoomTools(server: McpServer): void {
-  // list_rooms: retorna todas as mesas do SQLite (cache do last-known-state)
-  // Se o cache estiver vazio (ou fresh=true), busca ao vivo no Firecast via inbox.
   server.tool(
     "list_rooms",
-    "Lista todas as mesas abertas no Firecast. Usa cache local quando disponível, ou busca ao vivo com fresh: true.",
-    { fresh: z.boolean().optional().describe("Força busca ao vivo no Firecast ignorando cache") },
-    async ({ fresh }) => {
-      const result = await handleListRooms(fresh);
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
-    }
+    "Lista as mesas em que você está conectado no Firecast. Ponto de partida de quase todo fluxo: o campo `id` de cada mesa é o `room_id` exigido pelas outras tools. Retorna array de { id, nome, sistema, isModerada, haVagas, players[...], ... }. Usa o cache SQLite por padrão; se o cache estiver vazio busca ao vivo automaticamente.",
+    { fresh: freshSchema },
+    async ({ fresh }) => jsonResult(await handleListRooms(fresh))
   );
 
-  // get_room: busca uma mesa específica por ID (inclui lista de jogadores e detalhes completos)
   server.tool(
     "get_room",
-    "Retorna os detalhes de uma mesa específica pelo seu ID interno, incluindo jogadores conectados.",
+    "Retorna os detalhes de UMA mesa (nome, sistema, mensagens de status/boas-vindas, moderação e lista de jogadores). Atenção: aqui o parâmetro se chama `id`, não `room_id`.",
     {
-      id: z.number().int().describe("codigoInterno da mesa"),
-      fresh: z.boolean().optional().describe("Força busca ao vivo no Firecast ignorando cache"),
+      id: z.number().int().describe(ROOM_ID_DESC),
+      fresh: freshSchema,
     },
-    async ({ id, fresh }) => {
-      const result = await handleGetRoom(id, fresh);
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
-    }
+    async ({ id, fresh }) => jsonResult(await handleGetRoom(id, fresh))
   );
 
-  // list_players: lista os jogadores de uma mesa
   server.tool(
     "list_players",
-    "Lista todos os jogadores conectados na mesa especificada por ID, com status (+mestre, +jogador, espectador, ausente, etc.).",
+    "Lista os jogadores presentes na mesa: { id, login, nick, isMe, isMestre, isJogador, isEspectador, isAusente, personagemPrincipal, ... }. Use `id` como destinatário em visibility.recipients e `login` para chat_id 'pvt:<login>'.",
     {
-      room_id: z.number().int().describe("codigoInterno da mesa"),
-      fresh: z.boolean().optional().describe("Força busca ao vivo no Firecast ignorando cache"),
+      room_id: roomIdSchema,
+      fresh: freshSchema,
     },
-    async ({ room_id, fresh }) => {
-      const result = await handleListPlayers(room_id, fresh);
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
-    }
+    async ({ room_id, fresh }) => jsonResult(await handleListPlayers(room_id, fresh))
   );
 }

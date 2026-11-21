@@ -5,17 +5,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sendCommand } from "../bridge.js";
 import { extractSheetTemplate } from "../template.js";
+import {
+  jsonResult,
+  roomIdSchema,
+  codigoInternoSchema,
+  NodeOperationSchema,
+  GUARD_NOTE,
+  type NodeOperation,
+} from "./common.js";
 
-const TEST_ROOM_ID = 239256; // Mesa 'tttttaaaaa'
-
-// Tipos e Schemas
-export const NodeOperationSchema = z.object({
-  action: z.enum(["set", "delete"]).describe("Ação a ser executada: 'set' para atribuir valor ou 'delete' para remover"),
-  path: z.string().describe("Caminho do campo/sub-nodo (ex: 'atributos.forca', 'equipamento.arma', 'vida.atual')"),
-  value: z.any().optional().describe("Valor a ser atribuído quando action for 'set'"),
-});
-
-export type NodeOperation = z.infer<typeof NodeOperationSchema>;
+export { NodeOperationSchema, type NodeOperation } from "./common.js";
 
 // Handlers
 export async function handleListLibrary(params: {
@@ -137,6 +136,7 @@ export async function handleManageLibraryItem(params: {
   codigoInterno?: number;
   name?: string;
   dataType?: string;
+  avatar?: string;
   changes?: Record<string, unknown>;
 }): Promise<unknown> {
   return await sendCommand(
@@ -148,6 +148,7 @@ export async function handleManageLibraryItem(params: {
       codigoInterno: params.codigoInterno,
       name: params.name,
       dataType: params.dataType,
+      avatar: params.avatar,
       changes: params.changes,
     },
     30_000
@@ -269,373 +270,210 @@ export async function handleCreateCharacterSheet(params: {
 
 // Registro no MCP Server
 export function registerNdbTools(server: McpServer): void {
-  // 1. list_library
   server.tool(
     "list_library",
-    "Lista itens ou a árvore hierárquica da Biblioteca de uma mesa (pastas, personagens, etc.).",
+    "Navega pela Biblioteca da mesa (pastas e personagens/fichas). Use para descobrir o `codigoInterno` de fichas e pastas. Sem recursive: retorna { item, children[] } só com os filhos imediatos. Com recursive=true: retorna { tree } aninhado. Itens com tipo='personagem' trazem dataType, avatar, barras (bar0Val..bar3Max) e linhas editáveis (edtLine0/1).",
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      parent_codigo: z
-        .number()
-        .optional()
-        .describe("codigoInterno do item/pasta pai. Se omitido, lista a partir da raiz da biblioteca"),
-      recursive: z
-        .boolean()
-        .optional()
-        .describe("Se true, percorre recursivamente as subpastas montando uma árvore hierárquica. Padrão: false"),
-      max_depth: z
-        .number()
-        .optional()
-        .describe("Profundidade máxima de recursão ao listar a árvore. Padrão: 5"),
+      room_id: roomIdSchema,
+      parent_codigo: z.number().int().optional().describe("codigoInterno da pasta a listar. Omitido = raiz da biblioteca."),
+      recursive: z.boolean().optional().describe("true = desce pelas subpastas e devolve a árvore inteira. Padrão: false."),
+      max_depth: z.number().int().optional().describe("Profundidade máxima quando recursive=true. Padrão: 5."),
     },
-    async ({ room_id, parent_codigo, recursive, max_depth }) => {
-      const result = await handleListLibrary({
-        roomId: room_id,
-        parentCodigo: parent_codigo,
-        recursive,
-        maxDepth: max_depth,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, parent_codigo, recursive, max_depth }) =>
+      jsonResult(
+        await handleListLibrary({
+          roomId: room_id,
+          parentCodigo: parent_codigo,
+          recursive,
+          maxDepth: max_depth,
+        })
+      )
   );
 
-  // 2. get_library_item
   server.tool(
     "get_library_item",
-    "Obtém detalhes de um item específico da biblioteca (pasta, personagem, etc.) incluindo barras de recursos, status e filhos imediatos.",
+    "Detalhes de UM item da Biblioteca (pasta ou personagem): nome, tipo, dono, visibilidade, dataType, avatar, barras e filhos imediatos. Não lê o conteúdo da ficha — para isso use get_sheet_ndb ou get_character_sheet.",
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      codigo_interno: z.number().describe("codigoInterno do item da biblioteca"),
+      room_id: roomIdSchema,
+      codigo_interno: z.number().int().describe("codigoInterno do item (pasta ou personagem), obtido em list_library."),
     },
-    async ({ room_id, codigo_interno }) => {
-      const result = await handleGetLibraryItem({
-        roomId: room_id,
-        codigoInterno: codigo_interno,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, codigo_interno }) =>
+      jsonResult(await handleGetLibraryItem({ roomId: room_id, codigoInterno: codigo_interno }))
   );
 
-  // 3. get_sheet_ndb
   server.tool(
     "get_sheet_ndb",
-    "Abre o Node Database (NDB) de uma ficha de personagem no Firecast e retorna seus dados estruturados (atributos, nós filhos, listas) e/ou XML exportado.",
+    "Lê o conteúdo completo da ficha de um personagem (Node Database) direto do Firecast, sempre ao vivo. Retorna { characterName, dataType, data } onde `data` é a árvore de campos (nós repetidos de recordList viram arrays). Use `path` para ler só um trecho. Os nomes dos campos dependem do modelo de ficha (veja get_sheet_template).",
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      codigo_interno: z.number().describe("codigoInterno do personagem na biblioteca"),
-      path: z
-        .string()
-        .optional()
-        .describe("Caminho opcional para filtrar apenas um sub-nodo da ficha (ex: 'atributos', 'magias', 'inventario')"),
-      raw_xml: z
-        .boolean()
-        .optional()
-        .describe("Se true, inclui também o XML bruto exportado do NDB via NDB.exportXML. Padrão: false"),
-      max_depth: z
-        .number()
-        .optional()
-        .describe("Profundidade máxima de serialização da árvore de nós. Padrão: 8"),
+      room_id: roomIdSchema,
+      codigo_interno: codigoInternoSchema,
+      path: z.string().optional().describe("Sub-nó a retornar, com ponto (ex: 'atributos', 'atributos.forca'). Omitido = ficha inteira. Erro se o caminho não existir."),
+      raw_xml: z.boolean().optional().describe("true = inclui também `xml` com a exportação XML do nó (útil para backup ou para copiar a ficha via edit_sheet_ndb xml). Padrão: false."),
+      max_depth: z.number().int().optional().describe("Profundidade máxima da árvore serializada; nós mais fundos aparecem como { _truncated: true }. Padrão: 8."),
     },
-    async ({ room_id, codigo_interno, path, raw_xml, max_depth }) => {
-      const result = await handleGetSheetNDB({
-        roomId: room_id,
-        codigoInterno: codigo_interno,
-        path,
-        rawXml: raw_xml,
-        maxDepth: max_depth,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, codigo_interno, path, raw_xml, max_depth }) =>
+      jsonResult(
+        await handleGetSheetNDB({
+          roomId: room_id,
+          codigoInterno: codigo_interno,
+          path,
+          rawXml: raw_xml,
+          maxDepth: max_depth,
+        })
+      )
   );
 
-  // 4. edit_sheet_ndb
   server.tool(
     "edit_sheet_ndb",
-    "Modifica atributos ou sub-nós no Node Database (NDB) de uma ficha de personagem ou importa seu XML completo.",
+    "Escreve na ficha de um personagem (Node Database) via lista de operações set/delete, e/ou importa um XML completo. Se ambos forem enviados, o XML é importado primeiro e as operações aplicadas depois. As alterações sincronizam para todos na mesa. Retorna { appliedOperations, updatedData }. Alternativa mais simples para só trocar valores: update_character_sheet. " + GUARD_NOTE,
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      codigo_interno: z.number().describe("codigoInterno do personagem na biblioteca"),
+      room_id: roomIdSchema,
+      codigo_interno: codigoInternoSchema,
       operations: z
         .array(NodeOperationSchema)
         .optional()
-        .describe("Lista de operações a aplicar (action: 'set'|'delete', path: 'caminho.campo', value: ...)"),
-      xml: z
-        .string()
-        .optional()
-        .describe("XML completo a ser importado diretamente no NDB da ficha"),
+        .describe("Operações aplicadas em ordem, numa única transação. Ex: [{action:'set', path:'pv', value:30}, {action:'delete', path:'condicoes.envenenado'}]."),
+      xml: z.string().optional().describe("XML de NDB (formato de exportação do Firecast, ex: o `xml` de get_sheet_ndb com raw_xml=true) a importar na raiz da ficha."),
     },
-    async ({ room_id, codigo_interno, operations, xml }) => {
-      const result = await handleEditSheetNDB({
-        roomId: room_id,
-        codigoInterno: codigo_interno,
-        operations,
-        xml,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, codigo_interno, operations, xml }) =>
+      jsonResult(
+        await handleEditSheetNDB({
+          roomId: room_id,
+          codigoInterno: codigo_interno,
+          operations,
+          xml,
+        })
+      )
   );
 
-  // 5. open_dock_ndb
   server.tool(
     "open_dock_ndb",
-    "Abre um Node Database de janela acoplável (Dock NDB) ou NDB compartilhado da mesa / usuário no Firecast.",
+    "Lê um Node Database compartilhado da mesa (dados de janelas acopláveis/plugins, como trackers de iniciativa) ou o NDB privado do seu usuário na mesa. Retorna { name, isUser, data }. Sem efeito colateral, exceto criar o NDB vazio quando create=true e ele não existir.",
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      name: z.string().describe("Identificador do NodeDatabase da mesa (dataType/nome)"),
-      is_user: z
-        .boolean()
-        .optional()
-        .describe("Se true, abre o NDB exclusivo do usuário na mesa via asyncOpenUserRoomNDB. Padrão: false"),
-      create: z
-        .boolean()
-        .optional()
-        .describe("Se true, cria o NDB se ele ainda não existir. Padrão: true"),
-      path: z
-        .string()
-        .optional()
-        .describe("Caminho opcional para filtrar apenas um sub-nodo"),
-      raw_xml: z
-        .boolean()
-        .optional()
-        .describe("Se true, inclui também o XML bruto exportado via NDB.exportXML"),
-      max_depth: z
-        .number()
-        .optional()
-        .describe("Profundidade máxima de serialização. Padrão: 8"),
+      room_id: roomIdSchema,
+      name: z.string().describe("Nome/identificador do NDB da mesa (normalmente o dataType do dock; ver list_data_types com form_type='tablesDock')."),
+      is_user: z.boolean().optional().describe("true = NDB exclusivo do seu usuário nesta mesa; false = NDB compartilhado da mesa. Padrão: false."),
+      create: z.boolean().optional().describe("true = cria o NDB vazio se não existir; false = erro se não existir. Padrão: true."),
+      path: z.string().optional().describe("Sub-nó a retornar, com ponto. Omitido = tudo."),
+      raw_xml: z.boolean().optional().describe("true = inclui também a exportação XML. Padrão: false."),
+      max_depth: z.number().int().optional().describe("Profundidade máxima de serialização. Padrão: 8."),
     },
-    async ({ room_id, name, is_user, create, path, raw_xml, max_depth }) => {
-      const result = await handleOpenDockNDB({
-        roomId: room_id,
-        name,
-        isUser: is_user,
-        create,
-        path,
-        rawXml: raw_xml,
-        maxDepth: max_depth,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, name, is_user, create, path, raw_xml, max_depth }) =>
+      jsonResult(
+        await handleOpenDockNDB({
+          roomId: room_id,
+          name,
+          isUser: is_user,
+          create,
+          path,
+          rawXml: raw_xml,
+          maxDepth: max_depth,
+        })
+      )
   );
 
-  // 6. edit_dock_ndb
   server.tool(
     "edit_dock_ndb",
-    "Modifica atributos ou sub-nós em um Node Database de janela acoplável (Dock NDB) da mesa.",
+    "Escreve num Node Database compartilhado da mesa (dock) ou no NDB do seu usuário, com operações set/delete. Cria o NDB se não existir. Mesma semântica de operações de edit_sheet_ndb. " + GUARD_NOTE,
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      name: z.string().describe("Identificador do NodeDatabase da mesa (dataType/nome)"),
-      operations: z
-        .array(NodeOperationSchema)
-        .describe("Lista de operações a aplicar (action: 'set'|'delete', path: 'caminho.campo', value: ...)"),
-      is_user: z
-        .boolean()
-        .optional()
-        .describe("Se true, edita o NDB exclusivo do usuário na mesa"),
+      room_id: roomIdSchema,
+      name: z.string().describe("Nome/identificador do NDB da mesa (o mesmo usado em open_dock_ndb)."),
+      operations: z.array(NodeOperationSchema).describe("Operações aplicadas em ordem, numa única transação."),
+      is_user: z.boolean().optional().describe("true = edita o NDB exclusivo do seu usuário; false = NDB compartilhado da mesa. Padrão: false."),
     },
-    async ({ room_id, name, operations, is_user }) => {
-      const result = await handleEditDockNDB({
-        roomId: room_id,
-        name,
-        operations,
-        isUser: is_user,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, name, operations, is_user }) =>
+      jsonResult(
+        await handleEditDockNDB({
+          roomId: room_id,
+          name,
+          operations,
+          isUser: is_user,
+        })
+      )
   );
 
-  // 7. manage_library_item
   server.tool(
     "manage_library_item",
-    "Cria pastas ou personagens, atualiza nomes/avatares, move ou remove itens da biblioteca.",
+    "Altera a Biblioteca da mesa. Parâmetros necessários por ação: create_dir → name (+parent_codigo); create_char → name, data_type (+parent_codigo, avatar) — cria a ficha VAZIA (para já preencher a estrutura use create_character_sheet); update → codigo_interno + name e/ou changes; delete → codigo_interno (irreversível); move → codigo_interno + parent_codigo. " + GUARD_NOTE,
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
+      room_id: roomIdSchema,
       action: z
         .enum(["create_dir", "create_char", "update", "delete", "move"])
-        .describe("Ação na biblioteca: create_dir (criar pasta), create_char (criar personagem), update (atualizar), delete (remover), move (mover para outra pasta)"),
-      parent_codigo: z
-        .number()
-        .optional()
-        .describe("codigoInterno da pasta destino (para create_dir, create_char ou move)"),
-      codigo_interno: z
-        .number()
-        .optional()
-        .describe("codigoInterno do item alvo (para update, delete ou move)"),
-      name: z
-        .string()
-        .optional()
-        .describe("Nome do item (para create_dir, create_char ou update)"),
-      data_type: z
-        .string()
-        .optional()
-        .describe("dataType do modelo de ficha (para create_char)"),
+        .describe("create_dir = criar pasta; create_char = criar personagem; update = alterar atributos do item; delete = apagar item; move = mover para outra pasta."),
+      parent_codigo: z.number().int().optional().describe("codigoInterno da pasta pai/destino (create_dir, create_char, move). Omitido em create_* = raiz."),
+      codigo_interno: z.number().int().optional().describe("codigoInterno do item alvo (update, delete, move)."),
+      name: z.string().optional().describe("Nome do item (obrigatório em create_dir/create_char; em update renomeia)."),
+      data_type: z.string().optional().describe("Modelo de ficha para create_char (ex: 'br.com.rrpg.DnD5_S3'). Descubra com list_data_types form_type='sheetTemplate'."),
+      avatar: z.string().optional().describe("URL do avatar para create_char."),
       changes: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe("Campos a atualizar (para update)"),
+        .describe("Para update. Chaves aceitas pelo Firecast: name, visible (bool), editionBlocked (bool), ownerLogin (login do dono; '' = NPC), avatar (URL), bar0Val..bar3Val e bar0Max..bar3Max (números), edtLine0, edtLine1 (strings). Chaves omitidas não mudam."),
     },
-    async ({ room_id, action, parent_codigo, codigo_interno, name, data_type, changes }) => {
-      const result = await handleManageLibraryItem({
-        roomId: room_id,
-        action,
-        parentCodigo: parent_codigo,
-        codigoInterno: codigo_interno,
-        name,
-        dataType: data_type,
-        changes,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, action, parent_codigo, codigo_interno, name, data_type, avatar, changes }) =>
+      jsonResult(
+        await handleManageLibraryItem({
+          roomId: room_id,
+          action,
+          parentCodigo: parent_codigo,
+          codigoInterno: codigo_interno,
+          name,
+          dataType: data_type,
+          avatar,
+          changes,
+        })
+      )
   );
 
-  // 8. manage_room
   server.tool(
     "manage_room",
-    "Lê detalhes ou altera configurações administrativas de uma mesa (ex: moderação).",
+    "Administração da mesa. action='get_details' lê { nome, sistema, isModerada, haVagas, podeTablesDock }; action='set_moderada' liga/desliga a moderação da mesa. " + GUARD_NOTE,
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      action: z
-        .enum(["get_details", "set_moderada"])
-        .describe("Ação administrativa"),
-      moderada: z
-        .boolean()
-        .optional()
-        .describe("Se a mesa deve ser moderada (true) ou livre (false) quando action for 'set_moderada'"),
+      room_id: roomIdSchema,
+      action: z.enum(["get_details", "set_moderada"]).describe("'get_details' = leitura; 'set_moderada' = altera a moderação (exige `moderada`)."),
+      moderada: z.boolean().optional().describe("Com action='set_moderada': true = mesa moderada, false = livre."),
     },
-    async ({ room_id, action, moderada }) => {
-      const result = await handleManageRoom({
-        roomId: room_id,
-        action,
-        moderada,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, action, moderada }) =>
+      jsonResult(await handleManageRoom({ roomId: room_id, action, moderada }))
   );
 
-  // 9. get_sheet_template
   server.tool(
     "get_sheet_template",
-    "Inspeciona e extrai o schema completo de um modelo de ficha (RPK/LFM) instalado no Firecast pelo dataType ou nome. Retorna todos os campos diretos, módulos, recordLists de sub-itens e a estrutura padrão em JSON.",
+    "Descreve a estrutura de um modelo de ficha instalado (lido dos arquivos .rpk locais; funciona mesmo com o Firecast fechado): campos diretos, módulos/abas, recordLists (listas de itens) e `defaultData` (JSON com a estrutura padrão). Use antes de escrever numa ficha para saber os nomes exatos dos campos.",
     {
       data_type: z
         .string()
-        .describe("dataType do modelo de ficha (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.Nefertyne.FichaMultiaba', 'Ambesek.T20', 'br.com.cherryth.SoloLevelingRPG') ou nome do arquivo RPK"),
+        .describe("dataType do modelo (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.T20') ou nome do arquivo .rpk. Descubra os disponíveis com list_data_types ou pelo `dataType` de um personagem em list_library."),
     },
-    async ({ data_type }) => {
-      const result = await handleGetSheetTemplate({
-        dataType: data_type,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ data_type }) => jsonResult(await handleGetSheetTemplate({ dataType: data_type }))
   );
 
-  // 10. create_character_sheet
   server.tool(
     "create_character_sheet",
-    "Cria um novo personagem na biblioteca com um modelo de ficha específico e opcionalmente inicializa toda a estrutura de nós (NDB) com base no template extraído do RPK ou importa seu XML completo.",
+    "Cria um personagem na Biblioteca da mesa já com a ficha preenchida. Fluxo: cria o item (como manage_library_item create_char) e então (a) importa `xml`, se informado; senão (b) com auto_structure (padrão) grava a estrutura padrão do modelo (defaultData de get_sheet_template) com `initial_data` por cima. Retorna { item{codigoInterno,...}, template, initialData }. " + GUARD_NOTE,
     {
-      room_id: z.number().describe("codigoInterno da mesa"),
-      name: z.string().describe("Nome do personagem a ser criado"),
-      data_type: z
-        .string()
-        .describe("dataType do modelo de ficha (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.Nefertyne.FichaMultiaba', 'Ambesek.T20')"),
-      parent_codigo: z
-        .number()
-        .optional()
-        .describe("codigoInterno da pasta destino na biblioteca"),
-      auto_structure: z
-        .boolean()
-        .optional()
-        .describe("Se true (padrão), extrai o template do RPK e inicializa toda a estrutura do NDB no banco de dados."),
+      room_id: roomIdSchema,
+      name: z.string().describe("Nome do personagem na Biblioteca."),
+      data_type: z.string().describe("Modelo de ficha (ex: 'br.com.rrpg.DnD5_S3', 'Ambesek.T20'). Descubra com list_data_types form_type='sheetTemplate'."),
+      parent_codigo: z.number().int().optional().describe("codigoInterno da pasta de destino. Omitido = raiz da biblioteca."),
+      auto_structure: z.boolean().optional().describe("true (padrão) = grava a estrutura padrão do modelo na ficha; false = ficha vazia (initial_data é ignorado)."),
       initial_data: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe("Objeto com valores iniciais para mesclar sobre a estrutura padrão da ficha (ex: { nome: 'Conan', atributos: { forca: 18 } })"),
-      xml: z
-        .string()
-        .optional()
-        .describe("XML completo da ficha a ser importado após a criação"),
+        .describe("Valores que sobrescrevem as chaves de PRIMEIRO nível de defaultData (um objeto aninhado substitui o objeto padrão inteiro, não é mesclado). Ex: { nome: 'Conan', nivel: 3 }."),
+      xml: z.string().optional().describe("XML completo de NDB a importar. Se informado, auto_structure e initial_data são ignorados."),
     },
-    async ({ room_id, name, data_type, parent_codigo, auto_structure, initial_data, xml }) => {
-      const result = await handleCreateCharacterSheet({
-        roomId: room_id,
-        name,
-        dataType: data_type,
-        parentCodigo: parent_codigo,
-        autoStructure: auto_structure,
-        initialData: initial_data,
-        xml,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    }
+    async ({ room_id, name, data_type, parent_codigo, auto_structure, initial_data, xml }) =>
+      jsonResult(
+        await handleCreateCharacterSheet({
+          roomId: room_id,
+          name,
+          dataType: data_type,
+          parentCodigo: parent_codigo,
+          autoStructure: auto_structure,
+          initialData: initial_data,
+          xml,
+        })
+      )
   );
 }

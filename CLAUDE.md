@@ -20,6 +20,7 @@ All server commands run from `server/`:
 npm install
 npm run build        # tsc → dist/
 npm run dev          # tsx src/index.ts (stdio MCP mode)
+npm run docs:tools   # regenerates ../TOOLS.md (tool/param reference) from the zod definitions
 npm run pkg          # build + esbuild bundle + pkg → ../src/server.exe (node18-win-x64)
 npm run rpk:build    # rdk.exe -c in src/ → packages the plugin .rpk (src/output/)
 npm run rpk:install  # rdk.exe -i → installs the .rpk into the local Firecast
@@ -52,12 +53,14 @@ Note: the README's Claude Desktop path (`com.tkplayer.firecast-mcp\mcp\server.ex
 ### Server
 - `db.ts`: sql.js (pure WASM, inline build so `pkg` needs no external files). Whole DB is exported and rewritten to disk after every write. Tables: `rooms`, `room_events`, `chat_messages`, `characters` (server-local NPC/character manager, not Firecast data), `character_sheets` (NDB snapshots + deltas).
 - `tools/*.ts`: each exports `handleXxx` functions plus a `registerXxxTools(server)` that wraps them with zod schemas. Many are cache-first with a `fresh` flag.
+- `tools/registry.ts`: single list of tool groups (`TOOL_GROUPS`), `registerAllTools`, `collectTools()` (records definitions without a real server) and `SERVER_INSTRUCTIONS` (sent to clients in the MCP handshake). `tools/common.ts` holds the shared param schemas (`roomIdSchema`, `chatIdSchema`, `ImpersonationSchema`, `NodeOperationSchema`, `GUARD_NOTE`...) — reuse them so every tool describes a param the same way.
+- Tool/param descriptions are what agents read: say where each ID comes from, the default, and side effects. After changing any, run `npm run docs:tools` so `TOOLS.md` stays in sync.
 - `template.ts`: reads installed `.rpk` files (zip, via adm-zip) under `%APPDATA%/Firecast/Plugins` to extract sheet-template schemas — runs server-side, no bridge.
 - `storage/gdrive.ts`: media uploads go to a locally mounted Google Drive for Desktop (reads DriveFS's SQLite to get file IDs, no network API) with fallback to FireDrive via the `quick_upload` bridge command.
-- `http.ts`: debug HTTP server. Its `/call` dispatcher, `/tools` and `/status` listings are **hand-maintained duplicates** of the MCP registrations; `/mcp` JSON-RPC only supports `list_rooms`/`get_room`.
+- `http.ts`: debug HTTP server. `/tools` is generated from `collectTools()`. `/call` still has hand-written branches (they take precedence) but falls back to the registered tool with zod validation for any other name; `/status` is hand-maintained; `/mcp` JSON-RPC only supports `list_rooms`/`get_room`.
 
 ### Adding a tool that needs Firecast
-Touch all of: Lua handler in `src/plugin/commands/<domain>.lua` → `bridge.registerCommand(...)` in `src/plugin/init.lua` → `handleXxx` + `server.tool(...)` in `server/src/tools/<domain>.ts` (register function called from `index.ts`) → the `/call` branch (and `/tools` entry) in `http.ts`. Bridge command names (snake_case) don't always match MCP tool names (e.g. MCP `get_character_sheet` → bridge `sync_sheet`/`get_sheet_ndb`).
+Touch all of: Lua handler in `src/plugin/commands/<domain>.lua` → `bridge.registerCommand(...)` in `src/plugin/init.lua` → `handleXxx` + `server.tool(...)` in `server/src/tools/<domain>.ts` (new domains go into `TOOL_GROUPS` in `tools/registry.ts`) → `npm run docs:tools`. HTTP `/tools` and `/call` pick it up automatically. Bridge command names (snake_case) don't always match MCP tool names (e.g. MCP `get_character_sheet` → bridge `sync_sheet`/`get_sheet_ndb`).
 
 ### Lua plugin
 - `src/module.xml` defines plugin id `com.tkplayer.firecast_mcp` and version — bump `<version>` on release. Its writable VHD is `com.tkplayer.firecast_mcp_vhd`.

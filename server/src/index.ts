@@ -12,13 +12,7 @@ import fs from "fs";
 import { initDb } from "./db.js";
 import { initBridge } from "./bridge.js";
 import { startWatcher } from "./watcher.js";
-import { registerRoomTools } from "./tools/rooms.js";
-import { registerChatTools } from "./tools/chat.js";
-import { registerNdbTools } from "./tools/ndb.js";
-import { registerPluginsTools } from "./tools/plugins.js";
-import { registerCharacterTools } from "./tools/characters.js";
-import { registerMediaTools } from "./tools/media.js";
-import { registerSheetSyncTools } from "./tools/sheet_sync.js";
+import { registerAllTools, SERVER_INSTRUCTIONS } from "./tools/registry.js";
 import { startHttpServer } from "./http.js";
 import { readConfig, setActiveBridgeDir, type AppConfig } from "./config.js";
 
@@ -87,19 +81,13 @@ async function main(): Promise<void> {
     });
   } else {
     // --- Modo stdio (Padrão para MCP) ---
-    const server = new McpServer({
-      name: "firecast-mcp",
-      version: "1.0.0",
-    });
+    const server = new McpServer(
+      { name: "firecast-mcp", version: "1.0.0" },
+      { instructions: SERVER_INSTRUCTIONS }
+    );
 
-    // Registra ferramentas do MCP
-    registerRoomTools(server);
-    registerChatTools(server);
-    registerNdbTools(server);
-    registerPluginsTools(server);
-    registerCharacterTools(server);
-    registerMediaTools(server);
-    registerSheetSyncTools(server);
+    // Registra ferramentas do MCP (lista única em tools/registry.ts)
+    registerAllTools(server);
 
     process.stdin.on("close", () => process.exit(0));
     process.stdin.on("end", () => process.exit(0));
