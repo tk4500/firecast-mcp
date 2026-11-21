@@ -46,7 +46,7 @@ O banco de dados SQLite (`firecast.db`) pode ser configurado de três formas:
    {
      "db_path": "D:/MinhaPasta/firecast.db",
      "poll_interval_ms": 500,
-     "http_port": 3000
+     "http_port": 3060
    }
    ```
 
@@ -66,7 +66,7 @@ server.exe
 ### 2. Modo HTTP (`--http`) — Para Testes e Depuração
 Permite testar o servidor diretamente via navegador, curl ou scripts sem precisar de um cliente MCP:
 ```bash
-server.exe --http --port 3000
+server.exe --http --port 3060
 ```
 
 Rotas disponíveis no modo HTTP:
@@ -74,7 +74,7 @@ Rotas disponíveis no modo HTTP:
 - `GET /tools` — lista os schemas JSON das ferramentas MCP.
 - `POST /call` — executa uma ferramenta diretamente:
   ```bash
-  curl -X POST http://localhost:3000/call -H "Content-Type: application/json" -d '{"name": "list_rooms", "arguments": {}}'
+  curl -X POST http://localhost:3060/call -H "Content-Type: application/json" -d '{"name": "list_rooms", "arguments": {}}'
   ```
 - `GET /db/rooms` — inspeciona todas as mesas cacheadas no SQLite.
 - `GET /db/events` — inspeciona os últimos eventos de mesa recebidos no SQLite.

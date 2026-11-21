@@ -39,7 +39,7 @@ local function loadConfig()
     -- Valores padrão caso não exista
     return {
         poll_interval_ms = 500,
-        http_port = 3000,
+        http_port = 3060,
         version = "1.0.0"
     };
 end

@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
   if (isHttp) {
     // --- Modo HTTP (Testes, curl, inspeção) ---
-    const port = cliPort ?? (process.env.PORT ? parseInt(process.env.PORT, 10) : (config.http_port ?? 3000));
+    const port = cliPort ?? (process.env.PORT ? parseInt(process.env.PORT, 10) : (config.http_port ?? 3060));
     startHttpServer({
       port,
       bridgePath,

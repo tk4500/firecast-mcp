@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "firecast": {
+      "type": "stdio",
+      "command": "${APPDATA}/Firecast/Plugins/com.tkplayer.firecast_mcp_vhd/mcp/server.exe",
+      "args": []
+    }
+  }
+}

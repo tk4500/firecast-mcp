@@ -380,7 +380,7 @@ local function __reallyCloseLockPopup(form, lockPopup)
 					lockPopup.parent = nil;
 					lockPopup.__label.parent = nil;					
 					lockPopup.__indicator.parent = nil;
-			   end, 3000);
+			   end, 3060);
 end;
 
 local function __unlockFormWithActivity(form)

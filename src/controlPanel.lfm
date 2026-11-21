@@ -78,7 +78,7 @@
             return {
                 storage_provider = "auto",
                 gdrive_assets_dir = "G:/Meu Drive/Firecast Assets",
-                http_port = 3000,
+                http_port = 3060,
                 poll_interval_ms = 500,
                 version = "1.0.0"
             };
@@ -99,7 +99,7 @@
             local cfg = loadConfigFromVHD();
             memNode.storage_provider = cfg.storage_provider or "auto";
             memNode.gdrive_assets_dir = cfg.gdrive_assets_path or cfg.gdrive_assets_dir or "G:/Meu Drive/Firecast Assets";
-            memNode.http_port = tostring(cfg.http_port or 3000);
+            memNode.http_port = tostring(cfg.http_port or 3060);
             memNode.poll_interval_ms = tostring(cfg.poll_interval_ms or 500);
             memNode.db_path = cfg.db_path or "";
             self.boxConfig.node = memNode;
@@ -110,7 +110,7 @@
             cfg.storage_provider = memNode.storage_provider or "auto";
             cfg.gdrive_assets_path = memNode.gdrive_assets_dir or "G:/Meu Drive/Firecast Assets";
             cfg.gdrive_assets_dir = cfg.gdrive_assets_path;
-            cfg.http_port = tonumber(memNode.http_port) or 3000;
+            cfg.http_port = tonumber(memNode.http_port) or 3060;
             cfg.poll_interval_ms = tonumber(memNode.poll_interval_ms) or 500;
 
             if memNode.db_path and memNode.db_path ~= "" then
@@ -377,7 +377,7 @@
 
                                 <layout align="top" height="25" margins="{left=10, right=10, top=6}">
                                     <label align="left" width="140" text="Porta HTTP:" class="itemLabel"/>
-                                    <edit align="client" field="http_port" textPrompt="3000" margins="{left=5}"/>
+                                    <edit align="client" field="http_port" textPrompt="3060" margins="{left=5}"/>
                                 </layout>
 
                                 <layout align="top" height="25" margins="{left=10, right=10, top=6}">

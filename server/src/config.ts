@@ -35,7 +35,7 @@ export function readConfig(bridgeDir?: string): AppConfig {
   if (!fs.existsSync(configPath)) {
     const defaultConfig: AppConfig = {
       poll_interval_ms: 500,
-      http_port: 3000,
+      http_port: 3060,
       version: "1.0.0",
       storage_provider: "auto",
       gdrive_assets_path: "G:/Meu Drive/Firecast Assets",
